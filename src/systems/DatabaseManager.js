@@ -1,6 +1,6 @@
 /**
  * DatabaseManager - Handles all database operations and schema management
- * UPDATED VERSION with simplified guild settings and proper daily cap tracking
+ * UPDATED VERSION with setVoiceSessionWithTime method for proper voice session syncing
  */
 class DatabaseManager {
     constructor(db) {
@@ -298,7 +298,7 @@ class DatabaseManager {
     }
 
     /**
-     * Voice session management
+     * Voice session management - STANDARD METHOD
      */
     async setVoiceSession(userId, guildId, channelId, isMuted = false, isDeafened = false) {
         try {
@@ -321,6 +321,36 @@ class DatabaseManager {
             return result.rows[0];
         } catch (error) {
             console.error('Error setting voice session:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Voice session management - WITH CUSTOM TIME (for syncing existing sessions)
+     */
+    async setVoiceSessionWithTime(userId, guildId, channelId, isMuted = false, isDeafened = false, customTime = null) {
+        try {
+            console.log(`[DB] Setting voice session with custom time for ${userId} in channel ${channelId}`);
+            
+            const timestamp = customTime || new Date();
+            
+            const result = await this.db.query(`
+                INSERT INTO ${this.tables.voiceSessions} (user_id, guild_id, channel_id, is_muted, is_deafened, join_time, last_xp_time)
+                VALUES ($1, $2, $3, $4, $5, $6, $6)
+                ON CONFLICT (user_id, guild_id)
+                DO UPDATE SET
+                    channel_id = $3,
+                    is_muted = $4,
+                    is_deafened = $5,
+                    join_time = $6,
+                    last_xp_time = $6
+                RETURNING *
+            `, [userId, guildId, channelId, isMuted, isDeafened, timestamp]);
+            
+            console.log(`[DB] Voice session set with custom time successfully for ${userId}`);
+            return result.rows[0];
+        } catch (error) {
+            console.error('Error setting voice session with custom time:', error);
             return null;
         }
     }
