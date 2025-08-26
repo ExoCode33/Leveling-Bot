@@ -1,36 +1,49 @@
-# Use Node.js 18 with build tools
-FROM node:18-bullseye
+# Use official Node.js runtime as base image
+FROM node:18-alpine
 
-# Install canvas dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libcairo2-dev \
-    libpango1.0-dev \
-    libjpeg-dev \
-    libgif-dev \
-    librsvg2-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies for Canvas and build tools
+RUN apk add --no-cache \
+    build-base \
+    cairo-dev \
+    jpeg-dev \
+    pango-dev \
+    musl-dev \
+    giflib-dev \
+    pixman-dev \
+    pangomm-dev \
+    libjpeg-turbo-dev \
+    freetype-dev \
+    make \
+    g++ \
+    python3
 
-# Set working directory
+# Set working directory in container
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy package.json first (for better Docker layer caching)
+COPY package.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+# Use npm install instead of npm ci since we don't have package-lock.json
+RUN npm install --only=production && npm cache clean --force
 
 # Copy application code
 COPY . .
 
-# Create assets directory (optional)
-RUN mkdir -p assets/fonts
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S discordbot -u 1001
 
-# Set environment
-ENV NODE_ENV=production
+# Change ownership of app directory
+RUN chown -R discordbot:nodejs /app
+USER discordbot
 
-# Expose port
+# Expose port (Railway will override this)
 EXPOSE 3000
 
-# Start the bot
-CMD ["node", "index.js"]
+# Health check (optional but recommended)
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD node -e "console.log('Bot is running')" || exit 1
+
+# Start the application
+CMD ["npm", "start"]
