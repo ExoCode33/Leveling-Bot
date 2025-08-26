@@ -60,23 +60,6 @@ module.exports = {
                 
                 userData = {
                     userId: targetUser.id,
-                    level: 55, // Special level for Pirate King
-                    total_xp: 999999999,
-                    messages: 0,
-                    reactions: 0,
-                    voice_time: 0,
-                    member: member,
-                    isPirateKing: true,
-                    rank: 'PIRATE KING',
-                    bounty: bountyCalculator.getBountyForLevel(55, true)
-                };
-            } else {
-                // Regular user data
-                const currentLevel = levelCalculator.calculateLevel(userStats.total_xp);
-                const bounty = bountyCalculator.getBountyForLevel(currentLevel);
-                
-                userData = {
-                    userId: targetUser.id,
                     level: currentLevel,
                     total_xp: userStats.total_xp,
                     messages: userStats.messages || 0,
@@ -162,4 +145,21 @@ module.exports = {
             }
         }
     }
-};
+};d: targetUser.id,
+                    level: 55, // Special level for Pirate King
+                    total_xp: 999999999,
+                    messages: 0,
+                    reactions: 0,
+                    voice_time: 0,
+                    member: member,
+                    isPirateKing: true,
+                    rank: 'PIRATE KING',
+                    bounty: bountyCalculator.getBountyForLevel(55, true)
+                };
+            } else {
+                // Regular user data
+                const currentLevel = levelCalculator.calculateLevel(userStats.total_xp);
+                const bounty = bountyCalculator.getBountyForLevel(currentLevel);
+                
+                userData = {
+                    userI
