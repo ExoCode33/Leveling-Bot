@@ -1,9 +1,17 @@
 /**
  * DatabaseManager - Handles all database operations and schema management
+ * UPDATED VERSION with "Leveling-Bot" table prefix
  */
 class DatabaseManager {
     constructor(db) {
         this.db = db;
+        
+        // Define table names with prefix
+        this.tables = {
+            userLevels: '"Leveling-Bot_user_levels"',
+            dailyXP: '"Leveling-Bot_daily_xp"',
+            voiceSessions: '"Leveling-Bot_voice_sessions"'
+        };
     }
 
     /**
@@ -11,11 +19,11 @@ class DatabaseManager {
      */
     async initializeTables() {
         try {
-            console.log('🗄️ Initializing database tables...');
+            console.log('🗄️ Initializing Leveling-Bot database tables...');
 
             // User levels table - main XP tracking
             await this.db.query(`
-                CREATE TABLE IF NOT EXISTS user_levels (
+                CREATE TABLE IF NOT EXISTS ${this.tables.userLevels} (
                     user_id VARCHAR(20) NOT NULL,
                     guild_id VARCHAR(20) NOT NULL,
                     total_xp BIGINT DEFAULT 0,
@@ -31,7 +39,7 @@ class DatabaseManager {
 
             // Daily XP tracking table
             await this.db.query(`
-                CREATE TABLE IF NOT EXISTS daily_xp (
+                CREATE TABLE IF NOT EXISTS ${this.tables.dailyXP} (
                     user_id VARCHAR(20) NOT NULL,
                     guild_id VARCHAR(20) NOT NULL,
                     date DATE NOT NULL,
@@ -47,7 +55,7 @@ class DatabaseManager {
 
             // Voice sessions table - track active sessions
             await this.db.query(`
-                CREATE TABLE IF NOT EXISTS voice_sessions (
+                CREATE TABLE IF NOT EXISTS ${this.tables.voiceSessions} (
                     user_id VARCHAR(20) NOT NULL,
                     guild_id VARCHAR(20) NOT NULL,
                     channel_id VARCHAR(20) NOT NULL,
@@ -59,28 +67,18 @@ class DatabaseManager {
                 )
             `);
 
-            // Guild settings table
-            await this.db.query(`
-                CREATE TABLE IF NOT EXISTS guild_settings (
-                    guild_id VARCHAR(20) PRIMARY KEY,
-                    levelup_channel VARCHAR(20),
-                    levelup_enabled BOOLEAN DEFAULT true,
-                    xp_log_channel VARCHAR(20),
-                    xp_log_enabled BOOLEAN DEFAULT false,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            `);
-
             // Create indexes for better performance
-            await this.db.query('CREATE INDEX IF NOT EXISTS idx_user_levels_total_xp ON user_levels(guild_id, total_xp DESC)');
-            await this.db.query('CREATE INDEX IF NOT EXISTS idx_daily_xp_date ON daily_xp(date)');
-            await this.db.query('CREATE INDEX IF NOT EXISTS idx_voice_sessions_guild ON voice_sessions(guild_id)');
+            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_user_levels_total_xp" ON ${this.tables.userLevels}(guild_id, total_xp DESC)`);
+            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_user_levels_level" ON ${this.tables.userLevels}(guild_id, level DESC)`);
+            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_daily_xp_date" ON ${this.tables.dailyXP}(date)`);
+            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_daily_xp_user_date" ON ${this.tables.dailyXP}(user_id, guild_id, date)`);
+            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_voice_sessions_guild" ON ${this.tables.voiceSessions}(guild_id)`);
+            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_voice_sessions_channel" ON ${this.tables.voiceSessions}(channel_id)`);
 
-            console.log('✅ Database tables initialized successfully');
+            console.log('✅ Leveling-Bot database tables initialized successfully');
 
         } catch (error) {
-            console.error('❌ Error initializing database tables:', error);
+            console.error('❌ Error initializing Leveling-Bot database tables:', error);
             throw error;
         }
     }
@@ -91,7 +89,7 @@ class DatabaseManager {
     async getUserXP(userId, guildId) {
         try {
             const result = await this.db.query(
-                'SELECT * FROM user_levels WHERE user_id = $1 AND guild_id = $2',
+                `SELECT * FROM ${this.tables.userLevels} WHERE user_id = $1 AND guild_id = $2`,
                 [userId, guildId]
             );
             return result.rows[0] || null;
@@ -107,19 +105,19 @@ class DatabaseManager {
     async updateUserXP(userId, guildId, xpGain, source) {
         try {
             const sourceColumns = {
-                message: 'messages = user_levels.messages + 1',
-                reaction: 'reactions = user_levels.reactions + 1',
-                voice: 'voice_time = user_levels.voice_time + 1'
+                message: `messages = ${this.tables.userLevels}.messages + 1`,
+                reaction: `reactions = ${this.tables.userLevels}.reactions + 1`,
+                voice: `voice_time = ${this.tables.userLevels}.voice_time + 1`
             };
 
             const sourceColumn = sourceColumns[source] || '';
 
             const query = `
-                INSERT INTO user_levels (user_id, guild_id, total_xp, messages, reactions, voice_time)
+                INSERT INTO ${this.tables.userLevels} (user_id, guild_id, total_xp, messages, reactions, voice_time)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (user_id, guild_id)
                 DO UPDATE SET
-                    total_xp = user_levels.total_xp + $3,
+                    total_xp = ${this.tables.userLevels}.total_xp + $3,
                     ${sourceColumn ? sourceColumn + ',' : ''}
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING total_xp, level
@@ -147,7 +145,7 @@ class DatabaseManager {
     async updateUserLevel(userId, guildId, newLevel) {
         try {
             await this.db.query(
-                'UPDATE user_levels SET level = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2 AND guild_id = $3',
+                `UPDATE ${this.tables.userLevels} SET level = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2 AND guild_id = $3`,
                 [newLevel, userId, guildId]
             );
         } catch (error) {
@@ -161,7 +159,7 @@ class DatabaseManager {
     async getDailyXP(userId, guildId, date) {
         try {
             const result = await this.db.query(
-                'SELECT * FROM daily_xp WHERE user_id = $1 AND guild_id = $2 AND date = $3',
+                `SELECT * FROM ${this.tables.dailyXP} WHERE user_id = $1 AND guild_id = $2 AND date = $3`,
                 [userId, guildId, date]
             );
             return result.rows[0] || { total_xp: 0, message_xp: 0, voice_xp: 0, reaction_xp: 0 };
@@ -177,19 +175,19 @@ class DatabaseManager {
     async updateDailyXP(userId, guildId, date, xpGain, source) {
         try {
             const sourceColumns = {
-                message: ', message_xp = daily_xp.message_xp + $4',
-                voice: ', voice_xp = daily_xp.voice_xp + $4',
-                reaction: ', reaction_xp = daily_xp.reaction_xp + $4'
+                message: `, message_xp = ${this.tables.dailyXP}.message_xp + $4`,
+                voice: `, voice_xp = ${this.tables.dailyXP}.voice_xp + $4`,
+                reaction: `, reaction_xp = ${this.tables.dailyXP}.reaction_xp + $4`
             };
 
             const sourceColumn = sourceColumns[source] || '';
 
             const query = `
-                INSERT INTO daily_xp (user_id, guild_id, date, total_xp, message_xp, voice_xp, reaction_xp)
+                INSERT INTO ${this.tables.dailyXP} (user_id, guild_id, date, total_xp, message_xp, voice_xp, reaction_xp)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (user_id, guild_id, date)
                 DO UPDATE SET
-                    total_xp = daily_xp.total_xp + $4
+                    total_xp = ${this.tables.dailyXP}.total_xp + $4
                     ${sourceColumn}
                     , updated_at = CURRENT_TIMESTAMP
                 RETURNING total_xp
@@ -218,7 +216,7 @@ class DatabaseManager {
         try {
             const result = await this.db.query(`
                 SELECT user_id, total_xp, level, messages, reactions, voice_time
-                FROM user_levels 
+                FROM ${this.tables.userLevels} 
                 WHERE guild_id = $1 AND total_xp > 0
                 ORDER BY total_xp DESC 
                 LIMIT $2 OFFSET $3
@@ -238,9 +236,9 @@ class DatabaseManager {
         try {
             const result = await this.db.query(`
                 SELECT COUNT(*) + 1 as rank 
-                FROM user_levels 
+                FROM ${this.tables.userLevels} 
                 WHERE guild_id = $1 AND total_xp > (
-                    SELECT COALESCE(total_xp, 0) FROM user_levels 
+                    SELECT COALESCE(total_xp, 0) FROM ${this.tables.userLevels} 
                     WHERE user_id = $2 AND guild_id = $1
                 )
             `, [guildId, userId]);
@@ -253,58 +251,94 @@ class DatabaseManager {
     }
 
     /**
-     * Voice session management
+     * Voice session management - WITH LEVELING-BOT PREFIX
      */
     async setVoiceSession(userId, guildId, channelId, isMuted = false, isDeafened = false) {
         try {
-            await this.db.query(`
-                INSERT INTO voice_sessions (user_id, guild_id, channel_id, is_muted, is_deafened)
-                VALUES ($1, $2, $3, $4, $5)
+            console.log(`[DB] Setting voice session for ${userId} in channel ${channelId}`);
+            
+            const result = await this.db.query(`
+                INSERT INTO ${this.tables.voiceSessions} (user_id, guild_id, channel_id, is_muted, is_deafened, join_time, last_xp_time)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT (user_id, guild_id)
                 DO UPDATE SET
                     channel_id = $3,
-                    join_time = CURRENT_TIMESTAMP,
                     is_muted = $4,
-                    is_deafened = $5
+                    is_deafened = $5,
+                    join_time = CURRENT_TIMESTAMP,
+                    last_xp_time = CURRENT_TIMESTAMP
+                RETURNING *
             `, [userId, guildId, channelId, isMuted, isDeafened]);
+            
+            console.log(`[DB] Voice session set successfully for ${userId}`);
+            return result.rows[0];
         } catch (error) {
             console.error('Error setting voice session:', error);
+            return null;
         }
     }
 
     async updateVoiceSession(userId, guildId, isMuted, isDeafened) {
         try {
-            await this.db.query(`
-                UPDATE voice_sessions 
+            console.log(`[DB] Updating voice session for ${userId} - muted: ${isMuted}, deafened: ${isDeafened}`);
+            
+            const result = await this.db.query(`
+                UPDATE ${this.tables.voiceSessions} 
                 SET is_muted = $1, is_deafened = $2, last_xp_time = CURRENT_TIMESTAMP
                 WHERE user_id = $3 AND guild_id = $4
+                RETURNING *
             `, [isMuted, isDeafened, userId, guildId]);
+            
+            console.log(`[DB] Voice session updated for ${userId}`);
+            return result.rows[0];
         } catch (error) {
             console.error('Error updating voice session:', error);
+            return null;
         }
     }
 
     async removeVoiceSession(userId, guildId) {
         try {
-            await this.db.query(
-                'DELETE FROM voice_sessions WHERE user_id = $1 AND guild_id = $2',
+            console.log(`[DB] Removing voice session for ${userId}`);
+            
+            const result = await this.db.query(
+                `DELETE FROM ${this.tables.voiceSessions} WHERE user_id = $1 AND guild_id = $2 RETURNING *`,
                 [userId, guildId]
             );
+            
+            console.log(`[DB] Voice session removed for ${userId}`);
+            return result.rows[0];
         } catch (error) {
             console.error('Error removing voice session:', error);
+            return null;
         }
     }
 
     async getVoiceSessions(guildId) {
         try {
             const result = await this.db.query(
-                'SELECT * FROM voice_sessions WHERE guild_id = $1',
+                `SELECT * FROM ${this.tables.voiceSessions} WHERE guild_id = $1`,
                 [guildId]
             );
+            
+            console.log(`[DB] Retrieved ${result.rows.length} voice sessions for guild ${guildId}`);
             return result.rows;
         } catch (error) {
             console.error('Error getting voice sessions:', error);
             return [];
+        }
+    }
+
+    async getVoiceSession(userId, guildId) {
+        try {
+            const result = await this.db.query(
+                `SELECT * FROM ${this.tables.voiceSessions} WHERE user_id = $1 AND guild_id = $2`,
+                [userId, guildId]
+            );
+            return result.rows[0] || null;
+        } catch (error) {
+            console.error('Error getting voice session:', error);
+            return null;
         }
     }
 
@@ -314,14 +348,60 @@ class DatabaseManager {
     async cleanupOldDailyXP() {
         try {
             const result = await this.db.query(
-                "DELETE FROM daily_xp WHERE date < CURRENT_DATE - INTERVAL '30 days'"
+                `DELETE FROM ${this.tables.dailyXP} WHERE date < CURRENT_DATE - INTERVAL '30 days'`
             );
             
             if (result.rowCount > 0) {
-                console.log(`🧹 Cleaned up ${result.rowCount} old daily XP records`);
+                console.log(`🧹 Cleaned up ${result.rowCount} old Leveling-Bot daily XP records`);
             }
         } catch (error) {
             console.error('Error cleaning up old daily XP:', error);
+        }
+    }
+
+    /**
+     * Clean up orphaned voice sessions (users no longer in voice channels)
+     */
+    async cleanupOrphanedVoiceSessions(client) {
+        try {
+            const sessions = await this.db.query(`SELECT * FROM ${this.tables.voiceSessions}`);
+            let cleanedCount = 0;
+            
+            for (const session of sessions.rows) {
+                try {
+                    const guild = client.guilds.cache.get(session.guild_id);
+                    if (!guild) {
+                        // Guild doesn't exist, remove session
+                        await this.removeVoiceSession(session.user_id, session.guild_id);
+                        cleanedCount++;
+                        continue;
+                    }
+                    
+                    const member = await guild.members.fetch(session.user_id).catch(() => null);
+                    if (!member) {
+                        // Member not in guild, remove session
+                        await this.removeVoiceSession(session.user_id, session.guild_id);
+                        cleanedCount++;
+                        continue;
+                    }
+                    
+                    const voiceState = member.voice;
+                    if (!voiceState.channelId || voiceState.channelId !== session.channel_id) {
+                        // Member not in expected voice channel, remove session
+                        await this.removeVoiceSession(session.user_id, session.guild_id);
+                        cleanedCount++;
+                        continue;
+                    }
+                } catch (error) {
+                    console.error(`Error checking voice session for ${session.user_id}:`, error);
+                }
+            }
+            
+            if (cleanedCount > 0) {
+                console.log(`🧹 Cleaned up ${cleanedCount} orphaned Leveling-Bot voice sessions`);
+            }
+        } catch (error) {
+            console.error('Error cleaning up orphaned voice sessions:', error);
         }
     }
 
@@ -331,20 +411,68 @@ class DatabaseManager {
     async resetDailyXP() {
         try {
             const today = new Date().toISOString().split('T')[0];
-            await this.db.query('DELETE FROM daily_xp WHERE date < $1', [today]);
-            console.log('✅ Daily XP reset complete');
+            
+            // Count records before deletion
+            const countResult = await this.db.query(`SELECT COUNT(*) FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
+            const recordsToDelete = countResult.rows[0].count;
+            
+            // Delete old records
+            await this.db.query(`DELETE FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
+            
+            console.log(`✅ Leveling-Bot daily XP reset complete - Removed ${recordsToDelete} old records`);
         } catch (error) {
             console.error('Error resetting daily XP:', error);
         }
     }
 
     /**
-     * Cleanup and close connections
+     * Get database statistics
+     */
+    async getDatabaseStats() {
+        try {
+            const stats = {};
+            
+            // User levels stats
+            const userLevelsResult = await this.db.query(`
+                SELECT 
+                    COUNT(*) as total_users,
+                    SUM(total_xp) as total_xp,
+                    AVG(total_xp) as avg_xp,
+                    MAX(total_xp) as max_xp,
+                    MAX(level) as max_level
+                FROM ${this.tables.userLevels} WHERE total_xp > 0
+            `);
+            stats.userLevels = userLevelsResult.rows[0];
+            
+            // Daily XP stats
+            const dailyXPResult = await this.db.query(`
+                SELECT 
+                    COUNT(*) as total_records,
+                    COUNT(DISTINCT user_id) as active_users_today,
+                    SUM(total_xp) as total_daily_xp,
+                    AVG(total_xp) as avg_daily_xp
+                FROM ${this.tables.dailyXP} WHERE date = CURRENT_DATE
+            `);
+            stats.dailyXP = dailyXPResult.rows[0];
+            
+            // Voice sessions stats
+            const voiceResult = await this.db.query(`SELECT COUNT(*) as active_sessions FROM ${this.tables.voiceSessions}`);
+            stats.voiceSessions = voiceResult.rows[0];
+            
+            return stats;
+        } catch (error) {
+            console.error('Error getting database stats:', error);
+            return {};
+        }
+    }
+
+    /**
+     * Cleanup and maintenance
      */
     async cleanup() {
         try {
             await this.cleanupOldDailyXP();
-            console.log('🗄️ Database cleanup completed');
+            console.log('🗄️ Leveling-Bot database cleanup completed');
         } catch (error) {
             console.error('Error during database cleanup:', error);
         }
