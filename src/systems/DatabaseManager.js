@@ -1,292 +1,355 @@
 /**
- * DailyCapManager - Manages daily XP caps including tier bonuses
+ * DatabaseManager - Handles all database operations and schema management
  */
-class DailyCapManager {
-    constructor(db, databaseManager) {
+class DatabaseManager {
+    constructor(db) {
         this.db = db;
-        this.databaseManager = databaseManager;
     }
 
     /**
-     * Initialize daily cap manager
+     * Initialize all required database tables
      */
-    async initialize() {
+    async initializeTables() {
         try {
-            console.log('🔄 Initializing Daily Cap Manager...');
-            
-            // Clean up old records on startup
-            await this.cleanupOldRecords();
-            
-            console.log('✅ Daily Cap Manager initialized');
+            console.log('🗄️ Initializing database tables...');
+
+            // User levels table - main XP tracking
+            await this.db.query(`
+                CREATE TABLE IF NOT EXISTS user_levels (
+                    user_id VARCHAR(20) NOT NULL,
+                    guild_id VARCHAR(20) NOT NULL,
+                    total_xp BIGINT DEFAULT 0,
+                    level INTEGER DEFAULT 0,
+                    messages INTEGER DEFAULT 0,
+                    reactions INTEGER DEFAULT 0,
+                    voice_time INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, guild_id)
+                )
+            `);
+
+            // Daily XP tracking table
+            await this.db.query(`
+                CREATE TABLE IF NOT EXISTS daily_xp (
+                    user_id VARCHAR(20) NOT NULL,
+                    guild_id VARCHAR(20) NOT NULL,
+                    date DATE NOT NULL,
+                    total_xp INTEGER DEFAULT 0,
+                    message_xp INTEGER DEFAULT 0,
+                    voice_xp INTEGER DEFAULT 0,
+                    reaction_xp INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, guild_id, date)
+                )
+            `);
+
+            // Voice sessions table - track active sessions
+            await this.db.query(`
+                CREATE TABLE IF NOT EXISTS voice_sessions (
+                    user_id VARCHAR(20) NOT NULL,
+                    guild_id VARCHAR(20) NOT NULL,
+                    channel_id VARCHAR(20) NOT NULL,
+                    join_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_xp_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_muted BOOLEAN DEFAULT false,
+                    is_deafened BOOLEAN DEFAULT false,
+                    PRIMARY KEY (user_id, guild_id)
+                )
+            `);
+
+            // Guild settings table
+            await this.db.query(`
+                CREATE TABLE IF NOT EXISTS guild_settings (
+                    guild_id VARCHAR(20) PRIMARY KEY,
+                    levelup_channel VARCHAR(20),
+                    levelup_enabled BOOLEAN DEFAULT true,
+                    xp_log_channel VARCHAR(20),
+                    xp_log_enabled BOOLEAN DEFAULT false,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+
+            // Create indexes for better performance
+            await this.db.query('CREATE INDEX IF NOT EXISTS idx_user_levels_total_xp ON user_levels(guild_id, total_xp DESC)');
+            await this.db.query('CREATE INDEX IF NOT EXISTS idx_daily_xp_date ON daily_xp(date)');
+            await this.db.query('CREATE INDEX IF NOT EXISTS idx_voice_sessions_guild ON voice_sessions(guild_id)');
+
+            console.log('✅ Database tables initialized successfully');
+
         } catch (error) {
-            console.error('❌ Error initializing Daily Cap Manager:', error);
+            console.error('❌ Error initializing database tables:', error);
             throw error;
         }
     }
 
     /**
-     * Get current day string (EDT timezone)
+     * Get user XP data
      */
-    getCurrentDay() {
-        const now = new Date();
-        const edtOffset = this.isEDT(now) ? -4 : -5;
-        const edtTime = new Date(now.getTime() + (edtOffset * 60 * 60 * 1000));
-        
-        // Daily reset is at configured hour, so if before that time, use previous day
-        const resetHour = parseInt(process.env.DAILY_RESET_HOUR_EDT) || 19;
-        const resetMinute = parseInt(process.env.DAILY_RESET_MINUTE_EDT) || 35;
-        
-        if (edtTime.getHours() < resetHour || 
-            (edtTime.getHours() === resetHour && edtTime.getMinutes() < resetMinute)) {
-            edtTime.setDate(edtTime.getDate() - 1);
-        }
-        
-        return edtTime.toISOString().split('T')[0];
-    }
-
-    /**
-     * Check if date is EDT
-     */
-    isEDT(date) {
-        const year = date.getFullYear();
-        const marchSecondSunday = new Date(year, 2, 8);
-        marchSecondSunday.setDate(marchSecondSunday.getDate() + (7 - marchSecondSunday.getDay()));
-        const novemberFirstSunday = new Date(year, 10, 1);
-        novemberFirstSunday.setDate(novemberFirstSunday.getDate() + (7 - novemberFirstSunday.getDay()));
-        return date >= marchSecondSunday && date < novemberFirstSunday;
-    }
-
-    /**
-     * Get user's daily XP cap (includes tier bonuses)
-     */
-    async getUserDailyCap(userId, guildId, member = null) {
+    async getUserXP(userId, guildId) {
         try {
-            const baseCap = parseInt(process.env.DAILY_XP_CAP) || 15000;
-            
-            if (!member) {
-                return baseCap;
-            }
-
-            // Check for tier roles (highest tier wins)
-            for (let tier = 10; tier >= 1; tier--) {
-                const roleId = process.env[`TIER_${tier}_ROLE`];
-                const tierCap = parseInt(process.env[`TIER_${tier}_XP_CAP`]) || 0;
-                
-                if (roleId && tierCap > 0 && member.roles.cache.has(roleId)) {
-                    console.log(`[DAILY CAP] ${member.displayName} has Tier ${tier} cap: ${tierCap.toLocaleString()} XP`);
-                    return tierCap;
-                }
-            }
-
-            console.log(`[DAILY CAP] ${member.displayName} using base cap: ${baseCap.toLocaleString()} XP`);
-            return baseCap;
-            
+            const result = await this.db.query(
+                'SELECT * FROM user_levels WHERE user_id = $1 AND guild_id = $2',
+                [userId, guildId]
+            );
+            return result.rows[0] || null;
         } catch (error) {
-            console.error('Error getting user daily cap:', error);
-            return parseInt(process.env.DAILY_XP_CAP) || 15000;
+            console.error('Error getting user XP:', error);
+            return null;
         }
     }
 
     /**
-     * Get user's current daily XP
+     * Update user XP and stats
      */
-    async getUserDailyXP(userId, guildId) {
+    async updateUserXP(userId, guildId, xpGain, source) {
         try {
-            const currentDay = this.getCurrentDay();
-            const dailyData = await this.databaseManager.getDailyXP(userId, guildId, currentDay);
-            return dailyData.total_xp || 0;
+            const sourceColumns = {
+                message: 'messages = user_levels.messages + 1',
+                reaction: 'reactions = user_levels.reactions + 1',
+                voice: 'voice_time = user_levels.voice_time + 1'
+            };
+
+            const sourceColumn = sourceColumns[source] || '';
+
+            const query = `
+                INSERT INTO user_levels (user_id, guild_id, total_xp, messages, reactions, voice_time)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (user_id, guild_id)
+                DO UPDATE SET
+                    total_xp = user_levels.total_xp + $3,
+                    ${sourceColumn ? sourceColumn + ',' : ''}
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING total_xp, level
+            `;
+
+            const params = [
+                userId, guildId, xpGain,
+                source === 'message' ? 1 : 0,
+                source === 'reaction' ? 1 : 0,
+                source === 'voice' ? 1 : 0
+            ];
+
+            const result = await this.db.query(query, params);
+            return result.rows[0];
+
         } catch (error) {
-            console.error('Error getting user daily XP:', error);
+            console.error('Error updating user XP:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Update user level
+     */
+    async updateUserLevel(userId, guildId, newLevel) {
+        try {
+            await this.db.query(
+                'UPDATE user_levels SET level = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2 AND guild_id = $3',
+                [newLevel, userId, guildId]
+            );
+        } catch (error) {
+            console.error('Error updating user level:', error);
+        }
+    }
+
+    /**
+     * Get daily XP for user
+     */
+    async getDailyXP(userId, guildId, date) {
+        try {
+            const result = await this.db.query(
+                'SELECT * FROM daily_xp WHERE user_id = $1 AND guild_id = $2 AND date = $3',
+                [userId, guildId, date]
+            );
+            return result.rows[0] || { total_xp: 0, message_xp: 0, voice_xp: 0, reaction_xp: 0 };
+        } catch (error) {
+            console.error('Error getting daily XP:', error);
+            return { total_xp: 0, message_xp: 0, voice_xp: 0, reaction_xp: 0 };
+        }
+    }
+
+    /**
+     * Update daily XP
+     */
+    async updateDailyXP(userId, guildId, date, xpGain, source) {
+        try {
+            const sourceColumns = {
+                message: ', message_xp = daily_xp.message_xp + $4',
+                voice: ', voice_xp = daily_xp.voice_xp + $4',
+                reaction: ', reaction_xp = daily_xp.reaction_xp + $4'
+            };
+
+            const sourceColumn = sourceColumns[source] || '';
+
+            const query = `
+                INSERT INTO daily_xp (user_id, guild_id, date, total_xp, message_xp, voice_xp, reaction_xp)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (user_id, guild_id, date)
+                DO UPDATE SET
+                    total_xp = daily_xp.total_xp + $4
+                    ${sourceColumn}
+                    , updated_at = CURRENT_TIMESTAMP
+                RETURNING total_xp
+            `;
+
+            const params = [
+                userId, guildId, date, xpGain,
+                source === 'message' ? xpGain : 0,
+                source === 'voice' ? xpGain : 0,
+                source === 'reaction' ? xpGain : 0
+            ];
+
+            const result = await this.db.query(query, params);
+            return result.rows[0].total_xp;
+
+        } catch (error) {
+            console.error('Error updating daily XP:', error);
             return 0;
         }
     }
 
     /**
-     * Check if user can gain XP (not at cap)
+     * Get leaderboard data
      */
-    async canGainXP(userId, guildId, member = null) {
+    async getLeaderboard(guildId, limit = 50, offset = 0) {
         try {
-            const currentXP = await this.getUserDailyXP(userId, guildId);
-            const dailyCap = await this.getUserDailyCap(userId, guildId, member);
-            
-            const allowed = currentXP < dailyCap;
-            const remaining = Math.max(0, dailyCap - currentXP);
-            
-            return {
-                allowed,
-                currentXP,
-                dailyCap,
-                remaining,
-                percentage: Math.round((currentXP / dailyCap) * 100)
-            };
+            const result = await this.db.query(`
+                SELECT user_id, total_xp, level, messages, reactions, voice_time
+                FROM user_levels 
+                WHERE guild_id = $1 AND total_xp > 0
+                ORDER BY total_xp DESC 
+                LIMIT $2 OFFSET $3
+            `, [guildId, limit, offset]);
+
+            return result.rows;
         } catch (error) {
-            console.error('Error checking if user can gain XP:', error);
-            return { allowed: true, currentXP: 0, dailyCap: 15000, remaining: 15000, percentage: 0 };
+            console.error('Error getting leaderboard:', error);
+            return [];
         }
     }
 
     /**
-     * Add XP to user's daily total
+     * Get user rank
      */
-    async addXP(userId, guildId, xpAmount, source) {
+    async getUserRank(userId, guildId) {
         try {
-            const currentDay = this.getCurrentDay();
-            const newTotal = await this.databaseManager.updateDailyXP(userId, guildId, currentDay, xpAmount, source);
-            return newTotal;
+            const result = await this.db.query(`
+                SELECT COUNT(*) + 1 as rank 
+                FROM user_levels 
+                WHERE guild_id = $1 AND total_xp > (
+                    SELECT COALESCE(total_xp, 0) FROM user_levels 
+                    WHERE user_id = $2 AND guild_id = $1
+                )
+            `, [guildId, userId]);
+
+            return result.rows[0]?.rank || null;
         } catch (error) {
-            console.error('Error adding XP to daily total:', error);
-            return 0;
+            console.error('Error getting user rank:', error);
+            return null;
         }
     }
 
     /**
-     * Get daily XP stats for user
+     * Voice session management
      */
-    async getDailyStats(userId, guildId, member = null) {
+    async setVoiceSession(userId, guildId, channelId, isMuted = false, isDeafened = false) {
         try {
-            const currentDay = this.getCurrentDay();
-            const dailyData = await this.databaseManager.getDailyXP(userId, guildId, currentDay);
-            const dailyCap = await this.getUserDailyCap(userId, guildId, member);
-            
-            return {
-                date: currentDay,
-                totalXP: dailyData.total_xp || 0,
-                messageXP: dailyData.message_xp || 0,
-                voiceXP: dailyData.voice_xp || 0,
-                reactionXP: dailyData.reaction_xp || 0,
-                dailyCap: dailyCap,
-                remaining: Math.max(0, dailyCap - (dailyData.total_xp || 0)),
-                percentage: Math.round(((dailyData.total_xp || 0) / dailyCap) * 100),
-                isAtCap: (dailyData.total_xp || 0) >= dailyCap
-            };
+            await this.db.query(`
+                INSERT INTO voice_sessions (user_id, guild_id, channel_id, is_muted, is_deafened)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (user_id, guild_id)
+                DO UPDATE SET
+                    channel_id = $3,
+                    join_time = CURRENT_TIMESTAMP,
+                    is_muted = $4,
+                    is_deafened = $5
+            `, [userId, guildId, channelId, isMuted, isDeafened]);
         } catch (error) {
-            console.error('Error getting daily stats:', error);
-            return {
-                date: this.getCurrentDay(),
-                totalXP: 0,
-                messageXP: 0,
-                voiceXP: 0,
-                reactionXP: 0,
-                dailyCap: parseInt(process.env.DAILY_XP_CAP) || 15000,
-                remaining: parseInt(process.env.DAILY_XP_CAP) || 15000,
-                percentage: 0,
-                isAtCap: false
-            };
+            console.error('Error setting voice session:', error);
         }
     }
 
-    /**
-     * Get next reset timestamp (Unix)
-     */
-    getNextResetTimestamp() {
-        const now = new Date();
-        const resetHour = parseInt(process.env.DAILY_RESET_HOUR_EDT) || 19;
-        const resetMinute = parseInt(process.env.DAILY_RESET_MINUTE_EDT) || 35;
-        
-        // Calculate next reset time in EDT
-        const edtOffset = this.isEDT(now) ? -4 : -5;
-        const edtNow = new Date(now.getTime() + (edtOffset * 60 * 60 * 1000));
-        
-        let nextReset = new Date(edtNow);
-        nextReset.setHours(resetHour, resetMinute, 0, 0);
-        
-        // If reset time has passed today, schedule for tomorrow
-        if (edtNow.getTime() >= nextReset.getTime()) {
-            nextReset.setDate(nextReset.getDate() + 1);
+    async updateVoiceSession(userId, guildId, isMuted, isDeafened) {
+        try {
+            await this.db.query(`
+                UPDATE voice_sessions 
+                SET is_muted = $1, is_deafened = $2, last_xp_time = CURRENT_TIMESTAMP
+                WHERE user_id = $3 AND guild_id = $4
+            `, [isMuted, isDeafened, userId, guildId]);
+        } catch (error) {
+            console.error('Error updating voice session:', error);
         }
-        
-        // Convert back to UTC
-        const utcReset = new Date(nextReset.getTime() - (edtOffset * 60 * 60 * 1000));
-        return Math.floor(utcReset.getTime() / 1000);
     }
 
-    /**
-     * Reset daily XP for all users
-     */
-    async resetDaily() {
+    async removeVoiceSession(userId, guildId) {
         try {
-            console.log('🔄 Performing daily XP reset...');
-            
-            await this.databaseManager.resetDailyXP();
-            await this.cleanupOldRecords();
-            
-            console.log('✅ Daily XP reset complete');
+            await this.db.query(
+                'DELETE FROM voice_sessions WHERE user_id = $1 AND guild_id = $2',
+                [userId, guildId]
+            );
         } catch (error) {
-            console.error('❌ Error during daily reset:', error);
+            console.error('Error removing voice session:', error);
+        }
+    }
+
+    async getVoiceSessions(guildId) {
+        try {
+            const result = await this.db.query(
+                'SELECT * FROM voice_sessions WHERE guild_id = $1',
+                [guildId]
+            );
+            return result.rows;
+        } catch (error) {
+            console.error('Error getting voice sessions:', error);
+            return [];
         }
     }
 
     /**
      * Clean up old daily XP records (keep last 30 days)
      */
-    async cleanupOldRecords() {
+    async cleanupOldDailyXP() {
         try {
-            await this.databaseManager.cleanupOldDailyXP();
+            const result = await this.db.query(
+                "DELETE FROM daily_xp WHERE date < CURRENT_DATE - INTERVAL '30 days'"
+            );
+            
+            if (result.rowCount > 0) {
+                console.log(`🧹 Cleaned up ${result.rowCount} old daily XP records`);
+            }
         } catch (error) {
-            console.error('Error cleaning up old records:', error);
+            console.error('Error cleaning up old daily XP:', error);
         }
     }
 
     /**
-     * Get guild daily stats
+     * Reset all daily XP for new day
      */
-    async getGuildDailyStats(guildId) {
+    async resetDailyXP() {
         try {
-            const currentDay = this.getCurrentDay();
-            
-            const result = await this.db.query(`
-                SELECT 
-                    COUNT(*) as active_users,
-                    SUM(total_xp) as total_guild_xp,
-                    AVG(total_xp) as avg_user_xp,
-                    MAX(total_xp) as highest_user_xp,
-                    SUM(message_xp) as total_message_xp,
-                    SUM(voice_xp) as total_voice_xp,
-                    SUM(reaction_xp) as total_reaction_xp
-                FROM daily_xp 
-                WHERE guild_id = $1 AND date = $2
-            `, [guildId, currentDay]);
-
-            const stats = result.rows[0];
-            
-            return {
-                date: currentDay,
-                activeUsers: parseInt(stats.active_users) || 0,
-                totalGuildXP: parseInt(stats.total_guild_xp) || 0,
-                averageUserXP: Math.round(parseFloat(stats.avg_user_xp)) || 0,
-                highestUserXP: parseInt(stats.highest_user_xp) || 0,
-                totalMessageXP: parseInt(stats.total_message_xp) || 0,
-                totalVoiceXP: parseInt(stats.total_voice_xp) || 0,
-                totalReactionXP: parseInt(stats.total_reaction_xp) || 0,
-                nextReset: this.getNextResetTimestamp()
-            };
+            const today = new Date().toISOString().split('T')[0];
+            await this.db.query('DELETE FROM daily_xp WHERE date < $1', [today]);
+            console.log('✅ Daily XP reset complete');
         } catch (error) {
-            console.error('Error getting guild daily stats:', error);
-            return {
-                date: this.getCurrentDay(),
-                activeUsers: 0,
-                totalGuildXP: 0,
-                averageUserXP: 0,
-                highestUserXP: 0,
-                totalMessageXP: 0,
-                totalVoiceXP: 0,
-                totalReactionXP: 0,
-                nextReset: this.getNextResetTimestamp()
-            };
+            console.error('Error resetting daily XP:', error);
         }
     }
 
     /**
-     * Cleanup
+     * Cleanup and close connections
      */
     async cleanup() {
         try {
-            await this.cleanupOldRecords();
-            console.log('🧹 Daily Cap Manager cleanup complete');
+            await this.cleanupOldDailyXP();
+            await this.db.end();
+            console.log('🗄️ Database connections closed');
         } catch (error) {
-            console.error('Error during Daily Cap Manager cleanup:', error);
+            console.error('Error during database cleanup:', error);
         }
     }
 }
 
-module.exports = DailyCapManager;
+module.exports = DatabaseManager;
