@@ -92,7 +92,7 @@ class DailyCapManager {
     async getUserDailyXP(userId, guildId) {
         try {
             const currentDay = this.getCurrentDay();
-            const { DatabaseManager } = require('../systems/DatabaseManager');
+            const { DatabaseManager } = require('./DatabaseManager');
             const dbManager = new DatabaseManager(this.db);
             
             const dailyData = await dbManager.getDailyXP(userId, guildId, currentDay);
@@ -133,7 +133,7 @@ class DailyCapManager {
     async addXP(userId, guildId, xpAmount, source) {
         try {
             const currentDay = this.getCurrentDay();
-            const { DatabaseManager } = require('../systems/DatabaseManager');
+            const { DatabaseManager } = require('./DatabaseManager');
             const dbManager = new DatabaseManager(this.db);
             
             const newTotal = await dbManager.updateDailyXP(userId, guildId, currentDay, xpAmount, source);
@@ -150,7 +150,7 @@ class DailyCapManager {
     async getDailyStats(userId, guildId, member = null) {
         try {
             const currentDay = this.getCurrentDay();
-            const { DatabaseManager } = require('../systems/DatabaseManager');
+            const { DatabaseManager } = require('./DatabaseManager');
             const dbManager = new DatabaseManager(this.db);
             
             const dailyData = await dbManager.getDailyXP(userId, guildId, currentDay);
@@ -215,7 +215,7 @@ class DailyCapManager {
         try {
             console.log('🔄 Performing daily XP reset...');
             
-            const { DatabaseManager } = require('../systems/DatabaseManager');
+            const { DatabaseManager } = require('./DatabaseManager');
             const dbManager = new DatabaseManager(this.db);
             
             await dbManager.resetDailyXP();
@@ -232,7 +232,7 @@ class DailyCapManager {
      */
     async cleanupOldRecords() {
         try {
-            const { DatabaseManager } = require('../systems/DatabaseManager');
+            const { DatabaseManager } = require('./DatabaseManager');
             const dbManager = new DatabaseManager(this.db);
             
             await dbManager.cleanupOldDailyXP();
@@ -286,3 +286,21 @@ class DailyCapManager {
                 totalVoiceXP: 0,
                 totalReactionXP: 0,
                 nextReset: this.getNextResetTimestamp()
+            };
+        }
+    }
+
+    /**
+     * Cleanup
+     */
+    async cleanup() {
+        try {
+            await this.cleanupOldRecords();
+            console.log('🧹 Daily Cap Manager cleanup complete');
+        } catch (error) {
+            console.error('Error during Daily Cap Manager cleanup:', error);
+        }
+    }
+}
+
+module.exports = DailyCapManager;
