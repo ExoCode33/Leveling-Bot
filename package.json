@@ -1,0 +1,33 @@
+{
+  "name": "one-piece-xp-bot",
+  "version": "3.0.0",
+  "description": "Clean One Piece themed XP tracking bot with canvas generation",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "xp",
+    "leveling",
+    "one-piece",
+    "canvas"
+  ],
+  "author": "ExoCode",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.16.0",
+    "pg": "^8.12.0",
+    "dotenv": "^16.4.5",
+    "canvas": "^2.11.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
