@@ -7,9 +7,18 @@ const path = require('path');
 require('dotenv').config();
 
 // Import core systems
-const XPManager = require('./src/systems/XPManager');
+console.log('📁 Loading DatabaseManager...');
 const DatabaseManager = require('./src/systems/DatabaseManager');
+console.log('✅ DatabaseManager loaded:', typeof DatabaseManager);
+console.log('🔍 DatabaseManager prototype methods:', Object.getOwnPropertyNames(DatabaseManager.prototype));
+
+console.log('📁 Loading XPManager...');
+const XPManager = require('./src/systems/XPManager');
+console.log('✅ XPManager loaded');
+
+console.log('📁 Loading CommandLoader...');
 const { loadCommands, registerSlashCommands } = require('./src/utils/CommandLoader');
+console.log('✅ CommandLoader loaded');
 
 // Configuration validation
 const requiredEnvVars = ['DISCORD_TOKEN', 'CLIENT_ID', 'DATABASE_URL'];
@@ -52,8 +61,19 @@ async function initializeDatabase() {
         console.log(`✅ PostgreSQL connected at ${result.rows[0].now}`);
         testClient.release();
         
+        // Create DatabaseManager instance
+        console.log('🔧 Creating DatabaseManager instance...');
         databaseManager = new DatabaseManager(db);
-        console.log('📋 DatabaseManager created, initializing tables...');
+        console.log('📋 DatabaseManager created successfully');
+        
+        // Check if initializeTables method exists
+        if (typeof databaseManager.initializeTables !== 'function') {
+            console.error('❌ DatabaseManager.initializeTables is not a function!');
+            console.log('Available methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(databaseManager)));
+            throw new Error('DatabaseManager.initializeTables method not found');
+        }
+        
+        console.log('📋 Initializing database tables...');
         await databaseManager.initializeTables();
         console.log('✅ Database tables initialized');
         
