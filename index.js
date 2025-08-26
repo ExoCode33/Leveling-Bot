@@ -9,7 +9,7 @@ require('dotenv').config();
 // Import core systems
 const XPManager = require('./src/systems/XPManager');
 const DatabaseManager = require('./src/systems/DatabaseManager');
-const { loadCommands, registerSlashCommands } = require('./src/utils/commandLoader');
+const { loadCommands, registerSlashCommands } = require('./src/utils/CommandLoader');
 
 // Configuration validation
 const requiredEnvVars = ['DISCORD_TOKEN', 'CLIENT_ID', 'DATABASE_URL'];
@@ -131,22 +131,48 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 
 // Slash command handler
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
+    if (interaction.isChatInputCommand()) {
+        const command = client.commands.get(interaction.commandName);
+        if (!command) return;
 
-    const command = client.commands.get(interaction.commandName);
-    if (!command) return;
-
-    try {
-        await command.execute(interaction, { xpManager, databaseManager });
-    } catch (error) {
-        console.error(`Error executing command ${interaction.commandName}:`, error);
-        
-        const errorMessage = '❌ There was an error executing this command!';
-        
-        if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: errorMessage, ephemeral: true });
-        } else {
-            await interaction.reply({ content: errorMessage, ephemeral: true });
+        try {
+            await command.execute(interaction, { xpManager, databaseManager });
+        } catch (error) {
+            console.error(`Error executing command ${interaction.commandName}:`, error);
+            
+            const errorMessage = '❌ There was an error executing this command!';
+            
+            if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({ content: errorMessage, ephemeral: true });
+            } else {
+                await interaction.reply({ content: errorMessage, ephemeral: true });
+            }
+        }
+    } else if (interaction.isButton()) {
+        // Handle button interactions for leaderboard navigation
+        if (interaction.customId.startsWith('leaderboard_')) {
+            const type = interaction.customId.replace('leaderboard_', '');
+            const leaderboardCommand = client.commands.get('leaderboard');
+            
+            if (leaderboardCommand) {
+                // Create a mock interaction with the type option
+                const mockInteraction = {
+                    ...interaction,
+                    options: {
+                        getString: (name) => name === 'type' ? type : null
+                    }
+                };
+                
+                try {
+                    await leaderboardCommand.execute(mockInteraction, { xpManager, databaseManager });
+                } catch (error) {
+                    console.error('Error handling leaderboard button:', error);
+                    await interaction.reply({ 
+                        content: '❌ There was an error processing your request!', 
+                        ephemeral: true 
+                    });
+                }
+            }
         }
     }
 });
