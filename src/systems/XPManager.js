@@ -7,7 +7,7 @@ const XPLogger = require('../utils/XPLogger');
 
 /**
  * XPManager - Main XP tracking and management system
- * FIXED VERSION - Now properly handles existing voice sessions on startup
+ * DEBUG VERSION - Enhanced logging for voice session troubleshooting
  */
 class XPManager {
     constructor(client, db) {
@@ -54,63 +54,125 @@ class XPManager {
     }
 
     /**
-     * Sync existing voice sessions on bot startup - FIXED VERSION
+     * Sync existing voice sessions on bot startup - ENHANCED DEBUG VERSION
      */
     async syncExistingVoiceSessions() {
         try {
-            console.log('🎤 [VOICE SYNC] Syncing existing voice sessions...');
+            console.log('🎤 [VOICE SYNC] Starting voice session sync...');
+            console.log(`🎤 [VOICE SYNC] Bot is connected to ${this.client.guilds.cache.size} guilds`);
+            console.log(`🎤 [VOICE SYNC] Bot ready state: ${this.client.isReady()}`);
             
             let totalSynced = 0;
             let totalIgnored = 0;
+            let totalErrors = 0;
             
             for (const [guildId, guild] of this.client.guilds.cache) {
-                console.log(`🎤 [VOICE SYNC] Checking guild: ${guild.name}`);
-                
-                // Get all voice channels in the guild
-                const voiceChannels = guild.channels.cache.filter(channel => channel.type === 2); // GUILD_VOICE = 2
-                
-                for (const [channelId, channel] of voiceChannels) {
-                    if (channel.members.size > 0) {
-                        console.log(`🎤 [VOICE SYNC] Checking voice channel: ${channel.name} (${channel.members.size} total members)`);
-                        
-                        for (const [userId, member] of channel.members) {
-                            // IGNORE BOTS - THIS WAS THE MISSING PART!
-                            if (member.user.bot) {
-                                console.log(`🎤 [VOICE SYNC] Ignoring bot: ${member.user.username}`);
-                                totalIgnored++;
+                try {
+                    console.log(`🎤 [VOICE SYNC] === Checking guild: ${guild.name} (${guild.id}) ===`);
+                    
+                    // Get all channels and filter for voice channels
+                    const allChannels = guild.channels.cache;
+                    console.log(`🎤 [VOICE SYNC] Guild has ${allChannels.size} total channels`);
+                    
+                    const voiceChannels = allChannels.filter(channel => {
+                        console.log(`🎤 [VOICE SYNC] Channel: ${channel.name}, Type: ${channel.type}, IsVoice: ${channel.type === 2}`);
+                        return channel.type === 2; // GUILD_VOICE = 2
+                    });
+                    
+                    console.log(`🎤 [VOICE SYNC] Found ${voiceChannels.size} voice channels in ${guild.name}`);
+                    
+                    if (voiceChannels.size === 0) {
+                        console.log(`🎤 [VOICE SYNC] No voice channels found in ${guild.name}, skipping`);
+                        continue;
+                    }
+                    
+                    for (const [channelId, channel] of voiceChannels) {
+                        try {
+                            console.log(`🎤 [VOICE SYNC] --- Checking voice channel: ${channel.name} (${channelId}) ---`);
+                            console.log(`🎤 [VOICE SYNC] Channel members size: ${channel.members?.size || 0}`);
+                            
+                            if (!channel.members || channel.members.size === 0) {
+                                console.log(`🎤 [VOICE SYNC] Channel ${channel.name} is empty, skipping`);
                                 continue;
                             }
                             
-                            console.log(`🎤 [VOICE SYNC] Found user in voice: ${member.user.username} in ${channel.name}`);
+                            console.log(`🎤 [VOICE SYNC] Processing ${channel.members.size} members in ${channel.name}:`);
                             
-                            // Create voice session for existing user with ADJUSTED TIMING
-                            // Set last_xp_time to allow immediate XP processing
-                            const adjustedTime = new Date(Date.now() - (parseInt(process.env.VOICE_COOLDOWN) || 300000));
-                            
-                            await this.dbManager.setVoiceSessionWithTime(
-                                userId,
-                                guildId,
-                                channelId,
-                                member.voice.mute || member.voice.selfMute || false,
-                                member.voice.deaf || member.voice.selfDeaf || false,
-                                adjustedTime // This allows immediate XP processing
-                            );
-                            
-                            totalSynced++;
-                            console.log(`🎤 [VOICE SYNC] Synced voice session for ${member.user.username} (ready for XP)`);
+                            for (const [userId, member] of channel.members) {
+                                try {
+                                    console.log(`🎤 [VOICE SYNC] Member: ${member.user.username}#${member.user.discriminator} (${userId})`);
+                                    console.log(`🎤 [VOICE SYNC] - Is bot: ${member.user.bot}`);
+                                    console.log(`🎤 [VOICE SYNC] - Voice state: muted=${member.voice.mute || member.voice.selfMute}, deafened=${member.voice.deaf || member.voice.selfDeaf}`);
+                                    console.log(`🎤 [VOICE SYNC] - Current channel: ${member.voice.channelId}`);
+                                    
+                                    // IGNORE BOTS
+                                    if (member.user.bot) {
+                                        console.log(`🎤 [VOICE SYNC] ❌ Ignoring bot: ${member.user.username}`);
+                                        totalIgnored++;
+                                        continue;
+                                    }
+                                    
+                                    // Double-check they're actually in this channel
+                                    if (member.voice.channelId !== channelId) {
+                                        console.log(`🎤 [VOICE SYNC] ❌ Member ${member.user.username} voice state doesn't match channel`);
+                                        console.log(`🎤 [VOICE SYNC] Expected: ${channelId}, Actual: ${member.voice.channelId}`);
+                                        continue;
+                                    }
+                                    
+                                    console.log(`🎤 [VOICE SYNC] ✅ Processing voice session for: ${member.user.username}`);
+                                    
+                                    // Create voice session for existing user with ADJUSTED TIMING
+                                    // Set last_xp_time to allow immediate XP processing
+                                    const adjustedTime = new Date(Date.now() - (parseInt(process.env.VOICE_COOLDOWN) || 300000));
+                                    console.log(`🎤 [VOICE SYNC] Adjusted time for ${member.user.username}: ${adjustedTime.toISOString()}`);
+                                    
+                                    const result = await this.dbManager.setVoiceSessionWithTime(
+                                        userId,
+                                        guildId,
+                                        channelId,
+                                        member.voice.mute || member.voice.selfMute || false,
+                                        member.voice.deaf || member.voice.selfDeaf || false,
+                                        adjustedTime // This allows immediate XP processing
+                                    );
+                                    
+                                    if (result) {
+                                        totalSynced++;
+                                        console.log(`🎤 [VOICE SYNC] ✅ Successfully synced voice session for ${member.user.username}`);
+                                    } else {
+                                        console.log(`🎤 [VOICE SYNC] ❌ Failed to sync voice session for ${member.user.username}`);
+                                        totalErrors++;
+                                    }
+                                    
+                                } catch (memberError) {
+                                    console.error(`🎤 [VOICE SYNC] ❌ Error processing member ${userId}:`, memberError);
+                                    totalErrors++;
+                                }
+                            }
+                        } catch (channelError) {
+                            console.error(`🎤 [VOICE SYNC] ❌ Error processing channel ${channel.name}:`, channelError);
+                            totalErrors++;
                         }
                     }
+                } catch (guildError) {
+                    console.error(`🎤 [VOICE SYNC] ❌ Error processing guild ${guild.name}:`, guildError);
+                    totalErrors++;
                 }
             }
             
-            console.log(`🎤 [VOICE SYNC] Sync complete: ${totalSynced} users synced, ${totalIgnored} bots ignored`);
+            console.log(`🎤 [VOICE SYNC] === SYNC COMPLETE ===`);
+            console.log(`🎤 [VOICE SYNC] ✅ Users synced: ${totalSynced}`);
+            console.log(`🎤 [VOICE SYNC] ❌ Bots ignored: ${totalIgnored}`);
+            console.log(`🎤 [VOICE SYNC] ⚠️ Errors: ${totalErrors}`);
             
             // Process voice XP immediately for synced sessions
             if (totalSynced > 0) {
-                console.log(`🎤 [VOICE SYNC] Processing initial XP for ${totalSynced} synced sessions...`);
+                console.log(`🎤 [VOICE SYNC] Processing initial XP for ${totalSynced} synced sessions in 5 seconds...`);
                 setTimeout(() => {
+                    console.log(`🎤 [VOICE SYNC] Triggering immediate XP processing...`);
                     this.processVoiceXP().catch(console.error);
                 }, 5000); // Give 5 seconds for everything to settle
+            } else {
+                console.log(`🎤 [VOICE SYNC] No users to sync - no one in voice channels or all were bots`);
             }
         } catch (error) {
             console.error('❌ Error syncing existing voice sessions:', error);
