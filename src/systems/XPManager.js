@@ -138,7 +138,7 @@ class XPManager {
     }
 
     /**
-     * Handle voice state updates
+     * Handle voice state updates - CORRECTED VERSION
      */
     async handleVoiceStateUpdate(oldState, newState) {
         try {
@@ -152,6 +152,9 @@ class XPManager {
 
             const member = guild.members.cache.get(userId);
             if (!member || member.user.bot) return;
+
+            console.log(`[VOICE DEBUG] Processing voice state update for ${member.user.username}`);
+            console.log(`[VOICE DEBUG] Old channel: ${oldState.channelId}, New channel: ${newState.channelId}`);
 
             // User joined a voice channel
             if (!oldState.channelId && newState.channelId) {
@@ -181,23 +184,19 @@ class XPManager {
                 // If moved channels
                 if (oldState.channelId !== newState.channelId) {
                     console.log(`[VOICE] ${member.user.username} moved to ${newState.channel.name}`);
+                    
+                    // Reset session for new channel
+                    await this.dbManager.setVoiceSession(
+                        userId, 
+                        guildId, 
+                        newState.channelId,
+                        newMuted,
+                        newDeafened
+                    );
                 }
-                
-                // Update session if mute/deafen state changed or moved
-                if (oldMuted !== newMuted || oldDeafened !== newDeafened || oldState.channelId !== newState.channelId) {
-                    if (oldState.channelId !== newState.channelId) {
-                        // Moved channels - reset session
-                        await this.dbManager.setVoiceSession(
-                            userId, 
-                            guildId, 
-                            newState.channelId,
-                            newMuted,
-                            newDeafened
-                        );
-                    } else {
-                        // Just mute/deafen change
-                        await this.dbManager.updateVoiceSession(userId, guildId, newMuted, newDeafened);
-                    }
+                // Just mute/deafen state changed
+                else if (oldMuted !== newMuted || oldDeafened !== newDeafened) {
+                    await this.dbManager.updateVoiceSession(userId, guildId, newMuted, newDeafened);
                 }
             }
 
@@ -207,15 +206,19 @@ class XPManager {
     }
 
     /**
-     * Process voice XP for all active sessions
+     * Process voice XP for all active sessions - CORRECTED VERSION
      */
     async processVoiceXP() {
         try {
+            console.log(`[VOICE DEBUG] Processing voice XP for all guilds...`);
+            
             // Get all voice sessions
             const guilds = this.client.guilds.cache;
             
             for (const [guildId, guild] of guilds) {
+                console.log(`[VOICE DEBUG] Processing guild: ${guild.name}`);
                 const sessions = await this.dbManager.getVoiceSessions(guildId);
+                console.log(`[VOICE DEBUG] Found ${sessions.length} active voice sessions`);
                 
                 for (const session of sessions) {
                     await this.processUserVoiceXP(session, guild);
@@ -228,43 +231,66 @@ class XPManager {
     }
 
     /**
-     * Process voice XP for individual user
+     * Process voice XP for individual user - CORRECTED VERSION
      */
     async processUserVoiceXP(session, guild) {
         try {
             const now = Date.now();
-            const cooldownMs = parseInt(process.env.VOICE_COOLDOWN) || 300000;
+            const cooldownMs = parseInt(process.env.VOICE_COOLDOWN) || 300000; // 5 minutes
             const minMembers = parseInt(process.env.VOICE_MIN_MEMBERS) || 2;
             const antiAFK = process.env.VOICE_ANTI_AFK === 'true';
             
+            console.log(`[VOICE DEBUG] Processing XP for user ${session.user_id} in channel ${session.channel_id}`);
+            
             // Check cooldown
             const lastXPTime = new Date(session.last_xp_time).getTime();
-            if (now - lastXPTime < cooldownMs) {
+            const timeSinceLastXP = now - lastXPTime;
+            console.log(`[VOICE DEBUG] Time since last XP: ${timeSinceLastXP}ms (cooldown: ${cooldownMs}ms)`);
+            
+            if (timeSinceLastXP < cooldownMs) {
+                console.log(`[VOICE DEBUG] User ${session.user_id} still on cooldown`);
                 return;
             }
 
-            // Get channel and check member count
+            // Get channel and check if it still exists
             const channel = guild.channels.cache.get(session.channel_id);
             if (!channel) {
+                console.log(`[VOICE DEBUG] Channel ${session.channel_id} no longer exists, removing session`);
                 await this.dbManager.removeVoiceSession(session.user_id, session.guild_id);
                 return;
             }
 
+            // Check member count in channel
             const memberCount = channel.members.filter(m => !m.user.bot).size;
+            console.log(`[VOICE DEBUG] Channel ${channel.name} has ${memberCount} non-bot members (minimum required: ${minMembers})`);
+            
             if (memberCount < minMembers) {
+                console.log(`[VOICE DEBUG] Not enough members in channel for XP`);
                 return;
             }
 
             // Get member
             const member = await guild.members.fetch(session.user_id).catch(() => null);
             if (!member) {
+                console.log(`[VOICE DEBUG] Member ${session.user_id} not found, removing session`);
+                await this.dbManager.removeVoiceSession(session.user_id, session.guild_id);
+                return;
+            }
+
+            // Check if member is actually in the voice channel
+            const memberVoiceState = member.voice;
+            if (!memberVoiceState.channelId || memberVoiceState.channelId !== session.channel_id) {
+                console.log(`[VOICE DEBUG] Member ${member.user.username} not in expected voice channel, removing session`);
                 await this.dbManager.removeVoiceSession(session.user_id, session.guild_id);
                 return;
             }
 
             // Check daily cap
             const canGainXP = await this.dailyCapManager.canGainXP(session.user_id, session.guild_id, member);
+            console.log(`[VOICE DEBUG] Can gain XP: ${canGainXP.allowed} (${canGainXP.currentXP}/${canGainXP.dailyCap})`);
+            
             if (!canGainXP.allowed) {
+                console.log(`[VOICE DEBUG] User ${member.user.username} has reached daily cap`);
                 return;
             }
 
@@ -272,6 +298,8 @@ class XPManager {
             const minXP = parseInt(process.env.VOICE_XP_MIN) || 250;
             const maxXP = parseInt(process.env.VOICE_XP_MAX) || 350;
             let baseXP = Math.floor(Math.random() * (maxXP - minXP + 1)) + minXP;
+
+            console.log(`[VOICE DEBUG] Base XP calculated: ${baseXP}`);
 
             // Apply AFK penalty if enabled
             if (antiAFK && (session.is_muted || session.is_deafened)) {
@@ -285,6 +313,7 @@ class XPManager {
                 if (exemptUsers.includes(session.user_id)) {
                     isExempt = true;
                     baseXP = Math.round(baseXP * exemptMultiplier);
+                    console.log(`[VOICE DEBUG] User exempt from AFK penalty, XP: ${baseXP}`);
                 }
                 
                 // Check role exemption
@@ -293,6 +322,7 @@ class XPManager {
                         if (member.roles.cache.has(roleId.trim())) {
                             isExempt = true;
                             baseXP = Math.round(baseXP * exemptMultiplier);
+                            console.log(`[VOICE DEBUG] Role exempt from AFK penalty, XP: ${baseXP}`);
                             break;
                         }
                     }
@@ -301,21 +331,26 @@ class XPManager {
                 // Apply penalty if not exempt
                 if (!isExempt) {
                     baseXP = Math.round(baseXP * 0.25); // 25% XP when muted/deafened
+                    console.log(`[VOICE DEBUG] AFK penalty applied, XP reduced to: ${baseXP}`);
                 }
             }
 
-            // Apply tier multiplier
+            // Apply tier multiplier (if any)
             const tierMultiplier = await this.getTierMultiplier(member);
             const finalXP = Math.round(baseXP * tierMultiplier);
+
+            console.log(`[VOICE DEBUG] Final XP to award: ${finalXP}`);
 
             // Award XP
             await this.awardXP(session.user_id, session.guild_id, finalXP, 'voice', member.user, member);
             
+            console.log(`[VOICE DEBUG] XP awarded to ${member.user.username}: ${finalXP}`);
+
             // Update last XP time
             await this.dbManager.updateVoiceSession(session.user_id, session.guild_id, session.is_muted, session.is_deafened);
 
         } catch (error) {
-            console.error('Error processing user voice XP:', error);
+            console.error(`Error processing user voice XP for ${session.user_id}:`, error);
         }
     }
 
@@ -391,12 +426,15 @@ class XPManager {
     }
 
     /**
-     * Start voice XP processing interval
+     * Start voice XP processing interval - CORRECTED VERSION
      */
     startVoiceXPProcessing() {
         const interval = parseInt(process.env.VOICE_PROCESSING_INTERVAL) || 300000; // 5 minutes
         
+        console.log(`🎤 Starting voice XP processing with ${interval / 1000}s intervals`);
+        
         setInterval(() => {
+            console.log(`[VOICE DEBUG] Voice XP processing interval triggered`);
             this.processVoiceXP().catch(console.error);
         }, interval);
 
