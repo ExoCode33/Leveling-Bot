@@ -16,321 +16,6 @@ class DatabaseManager {
     }
 
     /**
-     * Get daily XP statistics for guild
-     */
-    async getDailyXPStats(guildId, date) {
-        try {
-            const result = await this.db.query(`
-                SELECT 
-                    COUNT(*) as active_users,
-                    SUM(total_xp) as total_guild_xp,
-                    AVG(total_xp) as avg_user_xp,
-                    MAX(total_xp) as highest_user_xp,
-                    SUM(message_xp) as total_message_xp,
-                    SUM(voice_xp) as total_voice_xp,
-                    SUM(reaction_xp) as total_reaction_xp,
-                    AVG(daily_cap) as avg_daily_cap,
-                    COUNT(CASE WHEN total_xp >= daily_cap THEN 1 END) as users_at_cap
-                FROM ${this.tables.dailyXP} 
-                WHERE guild_id = $1 AND date = $2
-            `, [guildId, date]);
-
-            return result.rows[0];
-        } catch (error) {
-            console.error('Error getting daily XP stats:', error);
-            return {
-                active_users: 0,
-                total_guild_xp: 0,
-                avg_user_xp: 0,
-                highest_user_xp: 0,
-                total_message_xp: 0,
-                total_voice_xp: 0,
-                total_reaction_xp: 0,
-                avg_daily_cap: parseInt(process.env.DAILY_XP_CAP) || 15000,
-                users_at_cap: 0
-            };
-        }
-    }
-
-    /**
-     * Get users currently at daily cap
-     */
-    async getUsersAtDailyCap(guildId, date) {
-        try {
-            const result = await this.db.query(`
-                SELECT user_id, total_xp, daily_cap, tier_level, tier_role_id
-                FROM ${this.tables.dailyXP} 
-                WHERE guild_id = $1 AND date = $2 AND total_xp >= daily_cap
-                ORDER BY total_xp DESC
-            `, [guildId, date]);
-
-            return result.rows;
-        } catch (error) {
-            console.error('Error getting users at daily cap:', error);
-            return [];
-        }
-    }
-
-    /**
-     * Get daily XP progress for specific user
-     */
-    async getUserDailyProgress(userId, guildId, date) {
-        try {
-            const result = await this.db.query(`
-                SELECT 
-                    total_xp,
-                    message_xp,
-                    voice_xp,
-                    reaction_xp,
-                    daily_cap,
-                    tier_level,
-                    tier_role_id,
-                    (daily_cap - total_xp) as remaining_xp,
-                    ROUND((total_xp::float / daily_cap::float) * 100, 2) as percentage
-                FROM ${this.tables.dailyXP} 
-                WHERE user_id = $1 AND guild_id = $2 AND date = $3
-            `, [userId, guildId, date]);
-
-            if (result.rows[0]) {
-                return result.rows[0];
-            }
-
-            // Return default if no record exists
-            const baseCap = parseInt(process.env.DAILY_XP_CAP) || 15000;
-            return {
-                total_xp: 0,
-                message_xp: 0,
-                voice_xp: 0,
-                reaction_xp: 0,
-                daily_cap: baseCap,
-                tier_level: 0,
-                tier_role_id: null,
-                remaining_xp: baseCap,
-                percentage: 0
-            };
-        } catch (error) {
-            console.error('Error getting user daily progress:', error);
-            const baseCap = parseInt(process.env.DAILY_XP_CAP) || 15000;
-            return {
-                total_xp: 0,
-                message_xp: 0,
-                voice_xp: 0,
-                reaction_xp: 0,
-                daily_cap: baseCap,
-                tier_level: 0,
-                tier_role_id: null,
-                remaining_xp: baseCap,
-                percentage: 0
-            };
-        }
-    }
-
-    /**
-     * Update user's tier information when roles change
-     */
-    async updateUserTierInfo(userId, guildId, date, tierLevel, tierRoleId, newDailyCap) {
-        try {
-            const result = await this.db.query(`
-                INSERT INTO ${this.tables.dailyXP} (user_id, guild_id, date, total_xp, daily_cap, tier_level, tier_role_id)
-                VALUES ($1, $2, $3, 0, $4, $5, $6)
-                ON CONFLICT (user_id, guild_id, date)
-                DO UPDATE SET
-                    daily_cap = $4,
-                    tier_level = $5,
-                    tier_role_id = $6,
-                    updated_at = CURRENT_TIMESTAMP
-                RETURNING *
-            `, [userId, guildId, date, newDailyCap, tierLevel, tierRoleId]);
-
-            console.log(`[DB] Updated tier info for ${userId}: Tier ${tierLevel}, Cap: ${newDailyCap}`);
-            return result.rows[0];
-        } catch (error) {
-            console.error('Error updating user tier info:', error);
-            return null;
-        }
-    }
-
-    /**
-     * Get all users with tier roles for a specific date
-     */
-    async getUsersWithTierRoles(guildId, date) {
-        try {
-            const result = await this.db.query(`
-                SELECT user_id, tier_level, tier_role_id, daily_cap, total_xp
-                FROM ${this.tables.dailyXP} 
-                WHERE guild_id = $1 AND date = $2 AND tier_level > 0
-                ORDER BY tier_level DESC, total_xp DESC
-            `, [guildId, date]);
-
-            return result.rows;
-        } catch (error) {
-            console.error('Error getting users with tier roles:', error);
-            return [];
-        }
-    }
-
-    /**
-     * Clean up old daily XP records (keep last 30 days) - SAFE FOR SHARED DATABASE
-     */
-    async cleanupOldDailyXP() {
-        try {
-            // SAFETY: Only affects Leveling-Bot prefixed table
-            const result = await this.db.query(
-                `DELETE FROM ${this.tables.dailyXP} WHERE date < CURRENT_DATE - INTERVAL '30 days'`
-            );
-            
-            if (result.rowCount > 0) {
-                console.log(`🧹 [Leveling-Bot] Cleaned up ${result.rowCount} old daily XP records (other bots unaffected)`);
-            }
-        } catch (error) {
-            console.error('[Leveling-Bot] Error cleaning up old daily XP:', error);
-        }
-    }
-
-    /**
-     * Clean up orphaned voice sessions - SAFE FOR SHARED DATABASE
-     */
-    async cleanupOrphanedVoiceSessions(client) {
-        try {
-            // SAFETY: Only queries Leveling-Bot prefixed table
-            const sessions = await this.db.query(`SELECT * FROM ${this.tables.voiceSessions}`);
-            let cleanedCount = 0;
-            
-            for (const session of sessions.rows) {
-                try {
-                    const guild = client.guilds.cache.get(session.guild_id);
-                    if (!guild) {
-                        // Guild doesn't exist, remove session (only Leveling-Bot session)
-                        await this.removeVoiceSession(session.user_id, session.guild_id);
-                        cleanedCount++;
-                        continue;
-                    }
-                    
-                    const member = await guild.members.fetch(session.user_id).catch(() => null);
-                    if (!member) {
-                        // Member not in guild, remove session (only Leveling-Bot session)
-                        await this.removeVoiceSession(session.user_id, session.guild_id);
-                        cleanedCount++;
-                        continue;
-                    }
-                    
-                    // SAFETY CHECK: Remove bots from voice sessions
-                    if (member.user.bot) {
-                        console.log(`[Leveling-Bot] Removing bot from voice sessions: ${member.user.username}`);
-                        await this.removeVoiceSession(session.user_id, session.guild_id);
-                        cleanedCount++;
-                        continue;
-                    }
-                    
-                    const voiceState = member.voice;
-                    if (!voiceState.channelId || voiceState.channelId !== session.channel_id) {
-                        // Member not in expected voice channel, remove session (only Leveling-Bot session)
-                        await this.removeVoiceSession(session.user_id, session.guild_id);
-                        cleanedCount++;
-                        continue;
-                    }
-                } catch (error) {
-                    console.error(`[Leveling-Bot] Error checking voice session for ${session.user_id}:`, error);
-                }
-            }
-            
-            if (cleanedCount > 0) {
-                console.log(`🧹 [Leveling-Bot] Cleaned up ${cleanedCount} orphaned voice sessions (other bots unaffected)`);
-            }
-        } catch (error) {
-            console.error('[Leveling-Bot] Error cleaning up orphaned voice sessions:', error);
-        }
-    }
-
-    /**
-     * Reset all daily XP for new day - SAFE FOR SHARED DATABASE
-     */
-    async resetDailyXP() {
-        try {
-            const today = new Date().toISOString().split('T')[0];
-            
-            // SAFETY: Only counts and deletes from Leveling-Bot prefixed table
-            const countResult = await this.db.query(`SELECT COUNT(*) FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
-            const recordsToDelete = countResult.rows[0].count;
-            
-            // Delete old records (only from Leveling-Bot table)
-            await this.db.query(`DELETE FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
-            
-            console.log(`✅ [Leveling-Bot] Daily XP reset complete - Removed ${recordsToDelete} old records (other bots unaffected)`);
-        } catch (error) {
-            console.error('[Leveling-Bot] Error resetting daily XP:', error);
-        }
-    }
-
-    /**
-     * Get database statistics - SAFE FOR SHARED DATABASE
-     */
-    async getDatabaseStats() {
-        try {
-            const stats = {};
-            
-            // SAFETY: Only queries Leveling-Bot prefixed tables
-            // User levels stats
-            const userLevelsResult = await this.db.query(`
-                SELECT 
-                    COUNT(*) as total_users,
-                    SUM(total_xp) as total_xp,
-                    AVG(total_xp) as avg_xp,
-                    MAX(total_xp) as max_xp,
-                    MAX(level) as max_level
-                FROM ${this.tables.userLevels} WHERE total_xp > 0
-            `);
-            stats.userLevels = userLevelsResult.rows[0];
-            
-            // Daily XP stats (Leveling-Bot only)
-            const dailyXPResult = await this.db.query(`
-                SELECT 
-                    COUNT(*) as total_records,
-                    COUNT(DISTINCT user_id) as active_users_today,
-                    SUM(total_xp) as total_daily_xp,
-                    AVG(total_xp) as avg_daily_xp,
-                    COUNT(CASE WHEN total_xp >= daily_cap THEN 1 END) as users_at_cap,
-                    AVG(daily_cap) as avg_daily_cap
-                FROM ${this.tables.dailyXP} WHERE date = CURRENT_DATE
-            `);
-            stats.dailyXP = dailyXPResult.rows[0];
-            
-            // Voice sessions stats (Leveling-Bot only)
-            const voiceResult = await this.db.query(`SELECT COUNT(*) as active_sessions FROM ${this.tables.voiceSessions}`);
-            stats.voiceSessions = voiceResult.rows[0];
-            
-            // Guild settings stats
-            const guildResult = await this.db.query(`
-                SELECT 
-                    COUNT(*) as total_guilds,
-                    COUNT(CASE WHEN levelup_enabled = true THEN 1 END) as guilds_with_levelup,
-                    COUNT(CASE WHEN xp_log_enabled = true THEN 1 END) as guilds_with_logging
-                FROM ${this.tables.guildSettings}
-            `);
-            stats.guildSettings = guildResult.rows[0];
-            
-            return stats;
-        } catch (error) {
-            console.error('[Leveling-Bot] Error getting database stats:', error);
-            return {};
-        }
-    }
-
-    /**
-     * Cleanup and maintenance - SAFE FOR SHARED DATABASE
-     */
-    async cleanup() {
-        try {
-            // SAFETY: Only cleans up Leveling-Bot prefixed tables
-            await this.cleanupOldDailyXP();
-            console.log('🗄️ [Leveling-Bot] Database cleanup completed (other bots unaffected)');
-        } catch (error) {
-            console.error('[Leveling-Bot] Error during database cleanup:', error);
-        }
-    }
-}
-
-module.exports = DatabaseManager;
      * Initialize all required database tables
      */
     async initializeTables() {
@@ -786,3 +471,318 @@ module.exports = DatabaseManager;
     }
 
     /**
+     * Get daily XP statistics for guild
+     */
+    async getDailyXPStats(guildId, date) {
+        try {
+            const result = await this.db.query(`
+                SELECT 
+                    COUNT(*) as active_users,
+                    SUM(total_xp) as total_guild_xp,
+                    AVG(total_xp) as avg_user_xp,
+                    MAX(total_xp) as highest_user_xp,
+                    SUM(message_xp) as total_message_xp,
+                    SUM(voice_xp) as total_voice_xp,
+                    SUM(reaction_xp) as total_reaction_xp,
+                    AVG(daily_cap) as avg_daily_cap,
+                    COUNT(CASE WHEN total_xp >= daily_cap THEN 1 END) as users_at_cap
+                FROM ${this.tables.dailyXP} 
+                WHERE guild_id = $1 AND date = $2
+            `, [guildId, date]);
+
+            return result.rows[0];
+        } catch (error) {
+            console.error('Error getting daily XP stats:', error);
+            return {
+                active_users: 0,
+                total_guild_xp: 0,
+                avg_user_xp: 0,
+                highest_user_xp: 0,
+                total_message_xp: 0,
+                total_voice_xp: 0,
+                total_reaction_xp: 0,
+                avg_daily_cap: parseInt(process.env.DAILY_XP_CAP) || 15000,
+                users_at_cap: 0
+            };
+        }
+    }
+
+    /**
+     * Get users currently at daily cap
+     */
+    async getUsersAtDailyCap(guildId, date) {
+        try {
+            const result = await this.db.query(`
+                SELECT user_id, total_xp, daily_cap, tier_level, tier_role_id
+                FROM ${this.tables.dailyXP} 
+                WHERE guild_id = $1 AND date = $2 AND total_xp >= daily_cap
+                ORDER BY total_xp DESC
+            `, [guildId, date]);
+
+            return result.rows;
+        } catch (error) {
+            console.error('Error getting users at daily cap:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get daily XP progress for specific user
+     */
+    async getUserDailyProgress(userId, guildId, date) {
+        try {
+            const result = await this.db.query(`
+                SELECT 
+                    total_xp,
+                    message_xp,
+                    voice_xp,
+                    reaction_xp,
+                    daily_cap,
+                    tier_level,
+                    tier_role_id,
+                    (daily_cap - total_xp) as remaining_xp,
+                    ROUND((total_xp::float / daily_cap::float) * 100, 2) as percentage
+                FROM ${this.tables.dailyXP} 
+                WHERE user_id = $1 AND guild_id = $2 AND date = $3
+            `, [userId, guildId, date]);
+
+            if (result.rows[0]) {
+                return result.rows[0];
+            }
+
+            // Return default if no record exists
+            const baseCap = parseInt(process.env.DAILY_XP_CAP) || 15000;
+            return {
+                total_xp: 0,
+                message_xp: 0,
+                voice_xp: 0,
+                reaction_xp: 0,
+                daily_cap: baseCap,
+                tier_level: 0,
+                tier_role_id: null,
+                remaining_xp: baseCap,
+                percentage: 0
+            };
+        } catch (error) {
+            console.error('Error getting user daily progress:', error);
+            const baseCap = parseInt(process.env.DAILY_XP_CAP) || 15000;
+            return {
+                total_xp: 0,
+                message_xp: 0,
+                voice_xp: 0,
+                reaction_xp: 0,
+                daily_cap: baseCap,
+                tier_level: 0,
+                tier_role_id: null,
+                remaining_xp: baseCap,
+                percentage: 0
+            };
+        }
+    }
+
+    /**
+     * Update user's tier information when roles change
+     */
+    async updateUserTierInfo(userId, guildId, date, tierLevel, tierRoleId, newDailyCap) {
+        try {
+            const result = await this.db.query(`
+                INSERT INTO ${this.tables.dailyXP} (user_id, guild_id, date, total_xp, daily_cap, tier_level, tier_role_id)
+                VALUES ($1, $2, $3, 0, $4, $5, $6)
+                ON CONFLICT (user_id, guild_id, date)
+                DO UPDATE SET
+                    daily_cap = $4,
+                    tier_level = $5,
+                    tier_role_id = $6,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING *
+            `, [userId, guildId, date, newDailyCap, tierLevel, tierRoleId]);
+
+            console.log(`[DB] Updated tier info for ${userId}: Tier ${tierLevel}, Cap: ${newDailyCap}`);
+            return result.rows[0];
+        } catch (error) {
+            console.error('Error updating user tier info:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Get all users with tier roles for a specific date
+     */
+    async getUsersWithTierRoles(guildId, date) {
+        try {
+            const result = await this.db.query(`
+                SELECT user_id, tier_level, tier_role_id, daily_cap, total_xp
+                FROM ${this.tables.dailyXP} 
+                WHERE guild_id = $1 AND date = $2 AND tier_level > 0
+                ORDER BY tier_level DESC, total_xp DESC
+            `, [guildId, date]);
+
+            return result.rows;
+        } catch (error) {
+            console.error('Error getting users with tier roles:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Clean up old daily XP records (keep last 30 days) - SAFE FOR SHARED DATABASE
+     */
+    async cleanupOldDailyXP() {
+        try {
+            // SAFETY: Only affects Leveling-Bot prefixed table
+            const result = await this.db.query(
+                `DELETE FROM ${this.tables.dailyXP} WHERE date < CURRENT_DATE - INTERVAL '30 days'`
+            );
+            
+            if (result.rowCount > 0) {
+                console.log(`🧹 [Leveling-Bot] Cleaned up ${result.rowCount} old daily XP records (other bots unaffected)`);
+            }
+        } catch (error) {
+            console.error('[Leveling-Bot] Error cleaning up old daily XP:', error);
+        }
+    }
+
+    /**
+     * Clean up orphaned voice sessions - SAFE FOR SHARED DATABASE
+     */
+    async cleanupOrphanedVoiceSessions(client) {
+        try {
+            // SAFETY: Only queries Leveling-Bot prefixed table
+            const sessions = await this.db.query(`SELECT * FROM ${this.tables.voiceSessions}`);
+            let cleanedCount = 0;
+            
+            for (const session of sessions.rows) {
+                try {
+                    const guild = client.guilds.cache.get(session.guild_id);
+                    if (!guild) {
+                        // Guild doesn't exist, remove session (only Leveling-Bot session)
+                        await this.removeVoiceSession(session.user_id, session.guild_id);
+                        cleanedCount++;
+                        continue;
+                    }
+                    
+                    const member = await guild.members.fetch(session.user_id).catch(() => null);
+                    if (!member) {
+                        // Member not in guild, remove session (only Leveling-Bot session)
+                        await this.removeVoiceSession(session.user_id, session.guild_id);
+                        cleanedCount++;
+                        continue;
+                    }
+                    
+                    // SAFETY CHECK: Remove bots from voice sessions
+                    if (member.user.bot) {
+                        console.log(`[Leveling-Bot] Removing bot from voice sessions: ${member.user.username}`);
+                        await this.removeVoiceSession(session.user_id, session.guild_id);
+                        cleanedCount++;
+                        continue;
+                    }
+                    
+                    const voiceState = member.voice;
+                    if (!voiceState.channelId || voiceState.channelId !== session.channel_id) {
+                        // Member not in expected voice channel, remove session (only Leveling-Bot session)
+                        await this.removeVoiceSession(session.user_id, session.guild_id);
+                        cleanedCount++;
+                        continue;
+                    }
+                } catch (error) {
+                    console.error(`[Leveling-Bot] Error checking voice session for ${session.user_id}:`, error);
+                }
+            }
+            
+            if (cleanedCount > 0) {
+                console.log(`🧹 [Leveling-Bot] Cleaned up ${cleanedCount} orphaned voice sessions (other bots unaffected)`);
+            }
+        } catch (error) {
+            console.error('[Leveling-Bot] Error cleaning up orphaned voice sessions:', error);
+        }
+    }
+
+    /**
+     * Reset all daily XP for new day - SAFE FOR SHARED DATABASE
+     */
+    async resetDailyXP() {
+        try {
+            const today = new Date().toISOString().split('T')[0];
+            
+            // SAFETY: Only counts and deletes from Leveling-Bot prefixed table
+            const countResult = await this.db.query(`SELECT COUNT(*) FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
+            const recordsToDelete = countResult.rows[0].count;
+            
+            // Delete old records (only from Leveling-Bot table)
+            await this.db.query(`DELETE FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
+            
+            console.log(`✅ [Leveling-Bot] Daily XP reset complete - Removed ${recordsToDelete} old records (other bots unaffected)`);
+        } catch (error) {
+            console.error('[Leveling-Bot] Error resetting daily XP:', error);
+        }
+    }
+
+    /**
+     * Get database statistics - SAFE FOR SHARED DATABASE
+     */
+    async getDatabaseStats() {
+        try {
+            const stats = {};
+            
+            // SAFETY: Only queries Leveling-Bot prefixed tables
+            // User levels stats
+            const userLevelsResult = await this.db.query(`
+                SELECT 
+                    COUNT(*) as total_users,
+                    SUM(total_xp) as total_xp,
+                    AVG(total_xp) as avg_xp,
+                    MAX(total_xp) as max_xp,
+                    MAX(level) as max_level
+                FROM ${this.tables.userLevels} WHERE total_xp > 0
+            `);
+            stats.userLevels = userLevelsResult.rows[0];
+            
+            // Daily XP stats (Leveling-Bot only)
+            const dailyXPResult = await this.db.query(`
+                SELECT 
+                    COUNT(*) as total_records,
+                    COUNT(DISTINCT user_id) as active_users_today,
+                    SUM(total_xp) as total_daily_xp,
+                    AVG(total_xp) as avg_daily_xp,
+                    COUNT(CASE WHEN total_xp >= daily_cap THEN 1 END) as users_at_cap,
+                    AVG(daily_cap) as avg_daily_cap
+                FROM ${this.tables.dailyXP} WHERE date = CURRENT_DATE
+            `);
+            stats.dailyXP = dailyXPResult.rows[0];
+            
+            // Voice sessions stats (Leveling-Bot only)
+            const voiceResult = await this.db.query(`SELECT COUNT(*) as active_sessions FROM ${this.tables.voiceSessions}`);
+            stats.voiceSessions = voiceResult.rows[0];
+            
+            // Guild settings stats
+            const guildResult = await this.db.query(`
+                SELECT 
+                    COUNT(*) as total_guilds,
+                    COUNT(CASE WHEN levelup_enabled = true THEN 1 END) as guilds_with_levelup,
+                    COUNT(CASE WHEN xp_log_enabled = true THEN 1 END) as guilds_with_logging
+                FROM ${this.tables.guildSettings}
+            `);
+            stats.guildSettings = guildResult.rows[0];
+            
+            return stats;
+        } catch (error) {
+            console.error('[Leveling-Bot] Error getting database stats:', error);
+            return {};
+        }
+    }
+
+    /**
+     * Cleanup and maintenance - SAFE FOR SHARED DATABASE
+     */
+    async cleanup() {
+        try {
+            // SAFETY: Only cleans up Leveling-Bot prefixed tables
+            await this.cleanupOldDailyXP();
+            console.log('🗄️ [Leveling-Bot] Database cleanup completed (other bots unaffected)');
+        } catch (error) {
+            console.error('[Leveling-Bot] Error during database cleanup:', error);
+        }
+    }
+}
+
+module.exports = DatabaseManager;
