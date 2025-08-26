@@ -343,27 +343,29 @@ class DatabaseManager {
     }
 
     /**
-     * Clean up old daily XP records (keep last 30 days)
+     * Clean up old daily XP records (keep last 30 days) - SAFE FOR SHARED DATABASE
      */
     async cleanupOldDailyXP() {
         try {
+            // SAFETY: Only affects Leveling-Bot prefixed table
             const result = await this.db.query(
                 `DELETE FROM ${this.tables.dailyXP} WHERE date < CURRENT_DATE - INTERVAL '30 days'`
             );
             
             if (result.rowCount > 0) {
-                console.log(`🧹 Cleaned up ${result.rowCount} old Leveling-Bot daily XP records`);
+                console.log(`🧹 [Leveling-Bot] Cleaned up ${result.rowCount} old daily XP records (other bots unaffected)`);
             }
         } catch (error) {
-            console.error('Error cleaning up old daily XP:', error);
+            console.error('[Leveling-Bot] Error cleaning up old daily XP:', error);
         }
     }
 
     /**
-     * Clean up orphaned voice sessions (users no longer in voice channels)
+     * Clean up orphaned voice sessions - SAFE FOR SHARED DATABASE
      */
     async cleanupOrphanedVoiceSessions(client) {
         try {
+            // SAFETY: Only queries Leveling-Bot prefixed table
             const sessions = await this.db.query(`SELECT * FROM ${this.tables.voiceSessions}`);
             let cleanedCount = 0;
             
@@ -371,7 +373,7 @@ class DatabaseManager {
                 try {
                     const guild = client.guilds.cache.get(session.guild_id);
                     if (!guild) {
-                        // Guild doesn't exist, remove session
+                        // Guild doesn't exist, remove session (only Leveling-Bot session)
                         await this.removeVoiceSession(session.user_id, session.guild_id);
                         cleanedCount++;
                         continue;
@@ -379,7 +381,7 @@ class DatabaseManager {
                     
                     const member = await guild.members.fetch(session.user_id).catch(() => null);
                     if (!member) {
-                        // Member not in guild, remove session
+                        // Member not in guild, remove session (only Leveling-Bot session)
                         await this.removeVoiceSession(session.user_id, session.guild_id);
                         cleanedCount++;
                         continue;
@@ -387,51 +389,52 @@ class DatabaseManager {
                     
                     const voiceState = member.voice;
                     if (!voiceState.channelId || voiceState.channelId !== session.channel_id) {
-                        // Member not in expected voice channel, remove session
+                        // Member not in expected voice channel, remove session (only Leveling-Bot session)
                         await this.removeVoiceSession(session.user_id, session.guild_id);
                         cleanedCount++;
                         continue;
                     }
                 } catch (error) {
-                    console.error(`Error checking voice session for ${session.user_id}:`, error);
+                    console.error(`[Leveling-Bot] Error checking voice session for ${session.user_id}:`, error);
                 }
             }
             
             if (cleanedCount > 0) {
-                console.log(`🧹 Cleaned up ${cleanedCount} orphaned Leveling-Bot voice sessions`);
+                console.log(`🧹 [Leveling-Bot] Cleaned up ${cleanedCount} orphaned voice sessions (other bots unaffected)`);
             }
         } catch (error) {
-            console.error('Error cleaning up orphaned voice sessions:', error);
+            console.error('[Leveling-Bot] Error cleaning up orphaned voice sessions:', error);
         }
     }
 
     /**
-     * Reset all daily XP for new day
+     * Reset all daily XP for new day - SAFE FOR SHARED DATABASE
      */
     async resetDailyXP() {
         try {
             const today = new Date().toISOString().split('T')[0];
             
-            // Count records before deletion
+            // SAFETY: Only counts and deletes from Leveling-Bot prefixed table
             const countResult = await this.db.query(`SELECT COUNT(*) FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
             const recordsToDelete = countResult.rows[0].count;
             
-            // Delete old records
+            // Delete old records (only from Leveling-Bot table)
             await this.db.query(`DELETE FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
             
-            console.log(`✅ Leveling-Bot daily XP reset complete - Removed ${recordsToDelete} old records`);
+            console.log(`✅ [Leveling-Bot] Daily XP reset complete - Removed ${recordsToDelete} old records (other bots unaffected)`);
         } catch (error) {
-            console.error('Error resetting daily XP:', error);
+            console.error('[Leveling-Bot] Error resetting daily XP:', error);
         }
     }
 
     /**
-     * Get database statistics
+     * Get database statistics - SAFE FOR SHARED DATABASE
      */
     async getDatabaseStats() {
         try {
             const stats = {};
             
+            // SAFETY: Only queries Leveling-Bot prefixed tables
             // User levels stats
             const userLevelsResult = await this.db.query(`
                 SELECT 
@@ -444,7 +447,7 @@ class DatabaseManager {
             `);
             stats.userLevels = userLevelsResult.rows[0];
             
-            // Daily XP stats
+            // Daily XP stats (Leveling-Bot only)
             const dailyXPResult = await this.db.query(`
                 SELECT 
                     COUNT(*) as total_records,
@@ -455,26 +458,27 @@ class DatabaseManager {
             `);
             stats.dailyXP = dailyXPResult.rows[0];
             
-            // Voice sessions stats
+            // Voice sessions stats (Leveling-Bot only)
             const voiceResult = await this.db.query(`SELECT COUNT(*) as active_sessions FROM ${this.tables.voiceSessions}`);
             stats.voiceSessions = voiceResult.rows[0];
             
             return stats;
         } catch (error) {
-            console.error('Error getting database stats:', error);
+            console.error('[Leveling-Bot] Error getting database stats:', error);
             return {};
         }
     }
 
     /**
-     * Cleanup and maintenance
+     * Cleanup and maintenance - SAFE FOR SHARED DATABASE
      */
     async cleanup() {
         try {
+            // SAFETY: Only cleans up Leveling-Bot prefixed tables
             await this.cleanupOldDailyXP();
-            console.log('🗄️ Leveling-Bot database cleanup completed');
+            console.log('🗄️ [Leveling-Bot] Database cleanup completed (other bots unaffected)');
         } catch (error) {
-            console.error('Error during database cleanup:', error);
+            console.error('[Leveling-Bot] Error during database cleanup:', error);
         }
     }
 }
