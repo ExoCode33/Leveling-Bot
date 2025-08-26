@@ -10,7 +10,6 @@ require('dotenv').config();
 console.log('📁 Loading DatabaseManager...');
 const DatabaseManager = require('./src/systems/DatabaseManager');
 console.log('✅ DatabaseManager loaded:', typeof DatabaseManager);
-console.log('🔍 DatabaseManager prototype methods:', Object.getOwnPropertyNames(DatabaseManager.prototype));
 
 console.log('📁 Loading XPManager...');
 const XPManager = require('./src/systems/XPManager');
@@ -148,6 +147,53 @@ client.on('messageReactionAdd', async (reaction, user) => {
 client.on('voiceStateUpdate', async (oldState, newState) => {
     if (xpManager) {
         await xpManager.handleVoiceStateUpdate(oldState, newState);
+    }
+});
+
+// Guild member update event (for tier role changes affecting daily caps)
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+    try {
+        // Check if roles changed
+        const oldRoles = oldMember.roles.cache;
+        const newRoles = newMember.roles.cache;
+        
+        // Compare role collections to see if any roles were added/removed
+        if (oldRoles.size !== newRoles.size || 
+            !oldRoles.every(role => newRoles.has(role.id))) {
+            
+            console.log(`[ROLE CHANGE] Detected role change for ${newMember.user.username}`);
+            
+            // Check if any tier roles were affected
+            const tierRoles = [];
+            for (let tier = 1; tier <= 10; tier++) {
+                const roleId = process.env[`TIER_${tier}_ROLE`];
+                if (roleId) {
+                    tierRoles.push({ tier, roleId });
+                }
+            }
+            
+            let tierRoleChanged = false;
+            for (const { tier, roleId } of tierRoles) {
+                const hadRole = oldRoles.has(roleId);
+                const hasRole = newRoles.has(roleId);
+                
+                if (hadRole !== hasRole) {
+                    tierRoleChanged = true;
+                    if (hasRole) {
+                        console.log(`[ROLE CHANGE] ${newMember.user.username} gained Tier ${tier} role`);
+                    } else {
+                        console.log(`[ROLE CHANGE] ${newMember.user.username} lost Tier ${tier} role`);
+                    }
+                }
+            }
+            
+            // If tier roles changed, handle daily cap adjustment
+            if (tierRoleChanged && xpManager && xpManager.dailyCapManager) {
+                await xpManager.dailyCapManager.handleRoleChange(newMember, oldRoles, newRoles);
+            }
+        }
+    } catch (error) {
+        console.error('Error handling guild member update:', error);
     }
 });
 
