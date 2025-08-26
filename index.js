@@ -47,10 +47,10 @@ async function initializeDatabase() {
         });
         
         // Test connection
-        const client = await db.connect();
-        const result = await client.query('SELECT NOW()');
+        const testClient = await db.connect();
+        const result = await testClient.query('SELECT NOW()');
         console.log(`✅ PostgreSQL connected at ${result.rows[0].now}`);
-        client.release();
+        testClient.release();
         
         databaseManager = new DatabaseManager(db);
         await databaseManager.initializeTables();
