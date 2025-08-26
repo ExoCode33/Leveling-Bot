@@ -13,28 +13,22 @@ module.exports = {
                 .addChoices(
                     { name: '📢 Set Level Up Channel', value: 'levelup-channel' },
                     { name: '📊 Set XP Log Channel', value: 'xp-log-channel' },
-                    { name: '🔄 Toggle Level Up Announcements', value: 'toggle-levelup' },
-                    { name: '🔄 Toggle XP Logging', value: 'toggle-xp-logs' },
+                    { name: '🔄 Disable Level Up Announcements', value: 'disable-levelup' },
+                    { name: '🔄 Disable XP Logging', value: 'disable-xp-logs' },
                     { name: '👁️ View Current Settings', value: 'view' }
                 )
         )
         .addChannelOption(option =>
             option
                 .setName('channel')
-                .setDescription('Channel to use (for levelup-channel or xp-log-channel)')
+                .setDescription('Channel to use (for setting channels)')
                 .setRequired(false)
-                .addChannelTypes(0)
-        )
-        .addBooleanOption(option =>
-            option
-                .setName('enabled')
-                .setDescription('Enable or disable (for toggle options)')
-                .setRequired(false)
+                .addChannelTypes(0) // Text channels only
         ),
 
     async execute(interaction, { xpManager, databaseManager }) {
         try {
-            // Double-check administrator permissions
+            // Check administrator permissions
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
                 return await interaction.reply({
                     content: '❌ **Access Denied**\n\nYou need Administrator permissions to use this command.',
@@ -44,7 +38,6 @@ module.exports = {
 
             const action = interaction.options.getString('action');
             const channel = interaction.options.getChannel('channel');
-            const enabled = interaction.options.getBoolean('enabled');
             const guildId = interaction.guild.id;
 
             switch (action) {
@@ -56,22 +49,22 @@ module.exports = {
                         });
                     }
 
-                    if (!channel.permissionsFor(interaction.guild.members.me).has(['SendMessages', 'EmbedLinks'])) {
+                    if (!channel.permissionsFor(interaction.guild.members.me).has(['SendMessages', 'EmbedLinks', 'AttachFiles'])) {
                         return await interaction.reply({
-                            content: `❌ **Permission Error**\n\nI don't have permission to send messages in ${channel}.`,
+                            content: `❌ **Permission Error**\n\nI don't have permission to send messages/embeds/files in ${channel}.`,
                             ephemeral: true
                         });
                     }
 
-                    // Save to environment (in production, this would be saved to database/config)
-                    process.env.LEVELUP_CHANNEL = channel.id;
-                    process.env.LEVELUP_ENABLED = 'true';
+                    // Update guild settings in database
+                    await databaseManager.updateGuildSetting(guildId, 'levelup_channel', channel.id);
+                    await databaseManager.updateGuildSetting(guildId, 'levelup_enabled', true);
 
                     return await interaction.reply({
                         embeds: [new EmbedBuilder()
                             .setColor('#00FF00')
                             .setTitle('✅ Level Up Channel Updated')
-                            .setDescription(`Level up announcements will now be sent to ${channel}`)
+                            .setDescription(`Level up announcements will now be sent to ${channel}\n\n*Level up announcements have been automatically enabled.*`)
                             .setFooter({ text: '⚓ Marine Intelligence • Settings Updated' })
                             .setTimestamp()
                         ]
@@ -87,14 +80,14 @@ module.exports = {
 
                     if (!channel.permissionsFor(interaction.guild.members.me).has(['SendMessages', 'EmbedLinks'])) {
                         return await interaction.reply({
-                            content: `❌ **Permission Error**\n\nI don't have permission to send messages in ${channel}.`,
+                            content: `❌ **Permission Error**\n\nI don't have permission to send messages/embeds in ${channel}.`,
                             ephemeral: true
                         });
                     }
 
-                    // Save to environment (in production, this would be saved to database/config)
-                    process.env.XP_LOG_CHANNEL = channel.id;
-                    process.env.XP_LOG_ENABLED = 'true';
+                    // Update guild settings in database
+                    await databaseManager.updateGuildSetting(guildId, 'xp_log_channel', channel.id);
+                    await databaseManager.updateGuildSetting(guildId, 'xp_log_enabled', true);
 
                     return await interaction.reply({
                         embeds: [new EmbedBuilder()
@@ -106,61 +99,34 @@ module.exports = {
                         ]
                     });
 
-                case 'toggle-levelup':
-                    if (enabled === null) {
-                        return await interaction.reply({
-                            content: '❌ **Missing Parameter**\n\nPlease specify whether to enable or disable level up announcements.',
-                            ephemeral: true
-                        });
-                    }
-
-                    process.env.LEVELUP_ENABLED = enabled.toString();
+                case 'disable-levelup':
+                    await databaseManager.updateGuildSetting(guildId, 'levelup_enabled', false);
 
                     return await interaction.reply({
                         embeds: [new EmbedBuilder()
-                            .setColor(enabled ? '#00FF00' : '#FF6B6B')
-                            .setTitle(`${enabled ? '✅' : '❌'} Level Up Announcements ${enabled ? 'Enabled' : 'Disabled'}`)
-                            .setDescription(enabled ? 
-                                'Level up announcements are now **enabled**.' :
-                                'Level up announcements are now **disabled**.'
-                            )
+                            .setColor('#FF6B6B')
+                            .setTitle('❌ Level Up Announcements Disabled')
+                            .setDescription('Level up announcements are now **disabled**.')
                             .setFooter({ text: '⚓ Marine Intelligence • Settings Updated' })
                             .setTimestamp()
                         ]
                     });
 
-                case 'toggle-xp-logs':
-                    if (enabled === null) {
-                        return await interaction.reply({
-                            content: '❌ **Missing Parameter**\n\nPlease specify whether to enable or disable XP logging.',
-                            ephemeral: true
-                        });
-                    }
-
-                    if (enabled && !process.env.XP_LOG_CHANNEL) {
-                        return await interaction.reply({
-                            content: '❌ **Configuration Error**\n\nYou must set an XP log channel first.',
-                            ephemeral: true
-                        });
-                    }
-                    
-                    process.env.XP_LOG_ENABLED = enabled.toString();
+                case 'disable-xp-logs':
+                    await databaseManager.updateGuildSetting(guildId, 'xp_log_enabled', false);
 
                     return await interaction.reply({
                         embeds: [new EmbedBuilder()
-                            .setColor(enabled ? '#00FF00' : '#FF6B6B')
-                            .setTitle(`${enabled ? '✅' : '❌'} XP Logging ${enabled ? 'Enabled' : 'Disabled'}`)
-                            .setDescription(enabled ? 
-                                'XP activity logging is now **enabled**.' :
-                                'XP activity logging is now **disabled**.'
-                            )
+                            .setColor('#FF6B6B')
+                            .setTitle('❌ XP Logging Disabled')
+                            .setDescription('XP activity logging is now **disabled**.')
                             .setFooter({ text: '⚓ Marine Intelligence • Settings Updated' })
                             .setTimestamp()
                         ]
                     });
 
                 case 'view':
-                    return await this.handleViewSettings(interaction);
+                    return await this.handleViewSettings(interaction, databaseManager, guildId);
 
                 default:
                     return await interaction.reply({
@@ -184,8 +150,10 @@ module.exports = {
     /**
      * Handle view settings
      */
-    async handleViewSettings(interaction) {
+    async handleViewSettings(interaction, databaseManager, guildId) {
         try {
+            const guildSettings = await databaseManager.getGuildSettings(guildId);
+            
             const embed = new EmbedBuilder()
                 .setColor('#4A90E2')
                 .setTitle('🔧 Server XP Settings')
@@ -193,17 +161,17 @@ module.exports = {
                 .addFields(
                     {
                         name: '📢 Level Up Announcements',
-                        value: `**Status:** ${process.env.LEVELUP_ENABLED === 'true' ? '✅ Enabled' : '❌ Disabled'}\n**Channel:** ${process.env.LEVELUP_CHANNEL ? `<#${process.env.LEVELUP_CHANNEL}>` : '❌ Not Set'}`,
+                        value: `**Status:** ${guildSettings?.levelup_enabled ? '✅ Enabled' : '❌ Disabled'}\n**Channel:** ${guildSettings?.levelup_channel ? `<#${guildSettings.levelup_channel}>` : '❌ Not Set'}`,
                         inline: false
                     },
                     {
                         name: '📊 XP Activity Logging',
-                        value: `**Status:** ${process.env.XP_LOG_ENABLED === 'true' ? '✅ Enabled' : '❌ Disabled'}\n**Channel:** ${process.env.XP_LOG_CHANNEL ? `<#${process.env.XP_LOG_CHANNEL}>` : '❌ Not Set'}`,
+                        value: `**Status:** ${guildSettings?.xp_log_enabled ? '✅ Enabled' : '❌ Disabled'}\n**Channel:** ${guildSettings?.xp_log_channel ? `<#${guildSettings.xp_log_channel}>` : '❌ Not Set'}`,
                         inline: false
                     },
                     {
                         name: '⚙️ XP Configuration',
-                        value: `**Message XP:** ${process.env.MESSAGE_XP_MIN || 75}-${process.env.MESSAGE_XP_MAX || 100} per message\n**Voice XP:** ${process.env.VOICE_XP_MIN || 250}-${process.env.VOICE_XP_MAX || 350} per minute\n**Reaction XP:** ${process.env.REACTION_XP_MIN || 75}-${process.env.REACTION_XP_MAX || 100} per reaction\n**Daily Cap:** ${parseInt(process.env.DAILY_XP_CAP || 15000).toLocaleString()} XP`,
+                        value: `**Message XP:** ${process.env.MESSAGE_XP_MIN || 75}-${process.env.MESSAGE_XP_MAX || 100} per message\n**Voice XP:** ${process.env.VOICE_XP_MIN || 250}-${process.env.VOICE_XP_MAX || 350} per 5 minutes\n**Reaction XP:** ${process.env.REACTION_XP_MIN || 75}-${process.env.REACTION_XP_MAX || 100} per reaction\n**Daily Cap:** ${parseInt(process.env.DAILY_XP_CAP || 15000).toLocaleString()} XP`,
                         inline: false
                     },
                     {
@@ -229,23 +197,11 @@ module.exports = {
                 .setColor('#4A90E2')
                 .setTitle('🔧 Server XP Settings')
                 .setDescription('Current configuration for this server')
-                .addFields(
-                    {
-                        name: '📢 Level Up Announcements',
-                        value: `**Status:** ${process.env.LEVELUP_ENABLED === 'true' ? '✅ Enabled' : '❌ Disabled'}`,
-                        inline: false
-                    },
-                    {
-                        name: '📊 XP Activity Logging',
-                        value: `**Status:** ${process.env.XP_LOG_ENABLED === 'true' ? '✅ Enabled' : '❌ Disabled'}`,
-                        inline: false
-                    },
-                    {
-                        name: '⚠️ Error',
-                        value: 'Could not load all settings information',
-                        inline: false
-                    }
-                )
+                .addFields({
+                    name: '⚠️ Error',
+                    value: 'Could not load settings information. Please try again.',
+                    inline: false
+                })
                 .setFooter({ text: '⚓ Marine Intelligence • Settings Overview' })
                 .setTimestamp();
 
@@ -264,15 +220,10 @@ module.exports = {
             const roleId = process.env[`TIER_${tier}_ROLE`];
             const capAmount = process.env[`TIER_${tier}_XP_CAP`];
             
-            if (roleId && capAmount && roleId !== `role_id_${tier}`) {
-                const guild = global.client?.guilds?.cache?.first();
-                const role = guild?.roles?.cache?.get(roleId);
-                const roleName = role ? role.name : `Tier ${tier} Role`;
-                
-                tierInfo += `**${roleName}:** ${parseInt(capAmount).toLocaleString()} XP cap\n`;
+            if (roleId && capAmount && roleId !== '' && capAmount !== '') {
+                tierInfo += `**Tier ${tier}:** ${parseInt(capAmount).toLocaleString()} XP daily cap\n`;
                 foundTiers++;
                 
-                // Limit display to prevent overflow
                 if (foundTiers >= 5) {
                     if (tier < 10) {
                         tierInfo += `*...and ${10 - tier} more tiers*\n`;
@@ -283,7 +234,7 @@ module.exports = {
         }
         
         if (foundTiers === 0) {
-            tierInfo = 'No tier roles configured\nTier roles provide increased daily XP caps';
+            tierInfo = 'No tier roles configured\nConfigure TIER_X_ROLE and TIER_X_XP_CAP in environment variables';
         }
         
         return tierInfo;
