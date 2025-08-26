@@ -1,6 +1,6 @@
 /**
  * DatabaseManager - Handles all database operations and schema management
- * UPDATED VERSION with setVoiceSessionWithTime method for proper voice session syncing
+ * FIXED VERSION with PostgreSQL compatibility for ROUND function
  */
 class DatabaseManager {
     constructor(db) {
@@ -557,7 +557,7 @@ class DatabaseManager {
     }
 
     /**
-     * Get daily XP progress for specific user
+     * Get daily XP progress for specific user - FIXED POSTGRESQL COMPATIBILITY
      */
     async getUserDailyProgress(userId, guildId, date) {
         try {
@@ -571,7 +571,7 @@ class DatabaseManager {
                     tier_level,
                     tier_role_id,
                     (daily_cap - total_xp) as remaining_xp,
-                    ROUND((total_xp::float / daily_cap::float) * 100, 2) as percentage
+                    CAST(ROUND(CAST((total_xp::float / daily_cap::float) * 100 AS numeric), 2) AS float) as percentage
                 FROM ${this.tables.dailyXP} 
                 WHERE user_id = $1 AND guild_id = $2 AND date = $3
             `, [userId, guildId, date]);
