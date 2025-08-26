@@ -7,7 +7,7 @@ const XPLogger = require('../utils/XPLogger');
 
 /**
  * XPManager - Main XP tracking and management system
- * COMPLETE VERSION with guild settings integration, voice session sync, and bot filtering
+ * FIXED VERSION - Now properly handles existing voice sessions on startup
  */
 class XPManager {
     constructor(client, db) {
@@ -25,7 +25,7 @@ class XPManager {
     }
 
     /**
-     * Initialize the XP manager - UPDATED WITH VOICE SESSION SYNC
+     * Initialize the XP manager - UPDATED WITH FIXED VOICE SESSION SYNC
      */
     async initialize() {
         try {
@@ -34,7 +34,10 @@ class XPManager {
             // Initialize daily cap manager
             await this.dailyCapManager.initialize();
             
-            // Sync existing voice sessions on startup
+            // Clean up any existing orphaned sessions first
+            await this.cleanupOrphanedVoiceSessions();
+            
+            // Sync existing voice sessions on startup with proper timing
             await this.syncExistingVoiceSessions();
             
             // Start voice XP processing interval
@@ -51,7 +54,7 @@ class XPManager {
     }
 
     /**
-     * Sync existing voice sessions on bot startup - CORRECTED VERSION
+     * Sync existing voice sessions on bot startup - FIXED VERSION
      */
     async syncExistingVoiceSessions() {
         try {
@@ -80,23 +83,35 @@ class XPManager {
                             
                             console.log(`🎤 [VOICE SYNC] Found user in voice: ${member.user.username} in ${channel.name}`);
                             
-                            // Create voice session for existing user
-                            await this.dbManager.setVoiceSession(
+                            // Create voice session for existing user with ADJUSTED TIMING
+                            // Set last_xp_time to allow immediate XP processing
+                            const adjustedTime = new Date(Date.now() - (parseInt(process.env.VOICE_COOLDOWN) || 300000));
+                            
+                            await this.dbManager.setVoiceSessionWithTime(
                                 userId,
                                 guildId,
                                 channelId,
                                 member.voice.mute || member.voice.selfMute || false,
-                                member.voice.deaf || member.voice.selfDeaf || false
+                                member.voice.deaf || member.voice.selfDeaf || false,
+                                adjustedTime // This allows immediate XP processing
                             );
                             
                             totalSynced++;
-                            console.log(`🎤 [VOICE SYNC] Synced voice session for ${member.user.username}`);
+                            console.log(`🎤 [VOICE SYNC] Synced voice session for ${member.user.username} (ready for XP)`);
                         }
                     }
                 }
             }
             
             console.log(`🎤 [VOICE SYNC] Sync complete: ${totalSynced} users synced, ${totalIgnored} bots ignored`);
+            
+            // Process voice XP immediately for synced sessions
+            if (totalSynced > 0) {
+                console.log(`🎤 [VOICE SYNC] Processing initial XP for ${totalSynced} synced sessions...`);
+                setTimeout(() => {
+                    this.processVoiceXP().catch(console.error);
+                }, 5000); // Give 5 seconds for everything to settle
+            }
         } catch (error) {
             console.error('❌ Error syncing existing voice sessions:', error);
         }
@@ -329,7 +344,7 @@ class XPManager {
     }
 
     /**
-     * Process voice XP for individual user with guild settings - CORRECTED WITH BOT FILTERING
+     * Process voice XP for individual user with guild settings - FIXED VERSION
      */
     async processUserVoiceXP(session, guild) {
         try {
@@ -340,13 +355,22 @@ class XPManager {
             
             console.log(`🎤 [VOICE DEBUG] Processing XP for user ${session.user_id} in channel ${session.channel_id}`);
             
-            // Check cooldown
+            // Check cooldown - FIXED: Allow immediate processing for newly synced sessions
             const lastXPTime = new Date(session.last_xp_time).getTime();
             const timeSinceLastXP = now - lastXPTime;
-            console.log(`🎤 [VOICE DEBUG] Time since last XP: ${Math.round(timeSinceLastXP/1000)}s (cooldown: ${cooldownMs/1000}s)`);
+            const joinTime = new Date(session.join_time).getTime();
+            const timeSinceJoin = now - joinTime;
             
-            if (timeSinceLastXP < cooldownMs) {
-                console.log(`🎤 [VOICE DEBUG] User ${session.user_id} still on cooldown`);
+            console.log(`🎤 [VOICE DEBUG] Time since last XP: ${Math.round(timeSinceLastXP/1000)}s (cooldown: ${cooldownMs/1000}s)`);
+            console.log(`🎤 [VOICE DEBUG] Time since join: ${Math.round(timeSinceJoin/1000)}s`);
+            
+            // For synced sessions, allow processing if they've been in channel for at least the cooldown period
+            // OR if enough time has passed since last XP award
+            const canProcessXP = (timeSinceLastXP >= cooldownMs) || 
+                                 (timeSinceJoin >= cooldownMs && lastXPTime === joinTime);
+            
+            if (!canProcessXP) {
+                console.log(`🎤 [VOICE DEBUG] User ${session.user_id} not ready for XP yet`);
                 return { xpAwarded: 0, reason: 'cooldown' };
             }
 
@@ -480,7 +504,7 @@ class XPManager {
             const finalXP = Math.round(xpAmount * globalMultiplier);
 
             // Update daily cap tracking
-            await this.dailyCapManager.addXP(userId, guildId, finalXP, source);
+            await this.dailyCapManager.addXP(userId, guildId, finalXP, source, member);
 
             // Get current user data
             const currentData = await this.dbManager.getUserXP(userId, guildId);
