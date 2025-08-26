@@ -1,486 +1,248 @@
-/**
- * DatabaseManager - Handles all database operations and schema management
- * UPDATED VERSION with "Leveling-Bot" table prefix
- */
-class DatabaseManager {
-    constructor(db) {
-        this.db = db;
-        
-        // Define table names with prefix
-        this.tables = {
-            userLevels: '"Leveling-Bot_user_levels"',
-            dailyXP: '"Leveling-Bot_daily_xp"',
-            voiceSessions: '"Leveling-Bot_voice_sessions"'
-        };
-    }
+-- COMPLETE DATABASE SETUP FOR ONE PIECE XP BOT
+-- ALL TABLES USE "Leveling-Bot" PREFIX INCLUDING GUILD SETTINGS
+-- SAFE FOR SHARED DATABASE - ONLY AFFECTS LEVELING-BOT TABLES
 
-    /**
-     * Initialize all required database tables
-     */
-    async initializeTables() {
-        try {
-            console.log('🗄️ Initializing Leveling-Bot database tables...');
+-- 1. MAIN USER LEVELS TABLE (REQUIRED)
+CREATE TABLE IF NOT EXISTS "Leveling-Bot_user_levels" (
+    user_id VARCHAR(20) NOT NULL,
+    guild_id VARCHAR(20) NOT NULL,
+    total_xp BIGINT DEFAULT 0,
+    level INTEGER DEFAULT 0,
+    messages INTEGER DEFAULT 0,
+    reactions INTEGER DEFAULT 0,
+    voice_time INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, guild_id)
+);
 
-            // User levels table - main XP tracking
-            await this.db.query(`
-                CREATE TABLE IF NOT EXISTS ${this.tables.userLevels} (
-                    user_id VARCHAR(20) NOT NULL,
-                    guild_id VARCHAR(20) NOT NULL,
-                    total_xp BIGINT DEFAULT 0,
-                    level INTEGER DEFAULT 0,
-                    messages INTEGER DEFAULT 0,
-                    reactions INTEGER DEFAULT 0,
-                    voice_time INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (user_id, guild_id)
-                )
-            `);
+-- 2. DAILY XP TRACKING TABLE (REQUIRED)
+CREATE TABLE IF NOT EXISTS "Leveling-Bot_daily_xp" (
+    user_id VARCHAR(20) NOT NULL,
+    guild_id VARCHAR(20) NOT NULL,
+    date DATE NOT NULL,
+    total_xp INTEGER DEFAULT 0,
+    message_xp INTEGER DEFAULT 0,
+    voice_xp INTEGER DEFAULT 0,
+    reaction_xp INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, guild_id, date)
+);
 
-            // Daily XP tracking table
-            await this.db.query(`
-                CREATE TABLE IF NOT EXISTS ${this.tables.dailyXP} (
-                    user_id VARCHAR(20) NOT NULL,
-                    guild_id VARCHAR(20) NOT NULL,
-                    date DATE NOT NULL,
-                    total_xp INTEGER DEFAULT 0,
-                    message_xp INTEGER DEFAULT 0,
-                    voice_xp INTEGER DEFAULT 0,
-                    reaction_xp INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (user_id, guild_id, date)
-                )
-            `);
+-- 3. VOICE SESSIONS TABLE (REQUIRED)
+CREATE TABLE IF NOT EXISTS "Leveling-Bot_voice_sessions" (
+    user_id VARCHAR(20) NOT NULL,
+    guild_id VARCHAR(20) NOT NULL,
+    channel_id VARCHAR(20) NOT NULL,
+    join_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_xp_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_muted BOOLEAN DEFAULT false,
+    is_deafened BOOLEAN DEFAULT false,
+    PRIMARY KEY (user_id, guild_id)
+);
 
-            // Voice sessions table - track active sessions
-            await this.db.query(`
-                CREATE TABLE IF NOT EXISTS ${this.tables.voiceSessions} (
-                    user_id VARCHAR(20) NOT NULL,
-                    guild_id VARCHAR(20) NOT NULL,
-                    channel_id VARCHAR(20) NOT NULL,
-                    join_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_xp_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_muted BOOLEAN DEFAULT false,
-                    is_deafened BOOLEAN DEFAULT false,
-                    PRIMARY KEY (user_id, guild_id)
-                )
-            `);
+-- 4. GUILD SETTINGS TABLE (REQUIRED FOR CHANNEL CONFIGURATION)
+CREATE TABLE IF NOT EXISTS "Leveling-Bot_guild_settings" (
+    guild_id VARCHAR(20) PRIMARY KEY,
+    levelup_channel VARCHAR(20),
+    levelup_enabled BOOLEAN DEFAULT true,
+    levelup_ping_user BOOLEAN DEFAULT true,
+    xp_log_channel VARCHAR(20),
+    xp_log_enabled BOOLEAN DEFAULT false,
+    xp_log_messages BOOLEAN DEFAULT false,
+    xp_log_reactions BOOLEAN DEFAULT false,
+    xp_log_voice BOOLEAN DEFAULT true,
+    xp_log_levelup BOOLEAN DEFAULT false,
+    message_xp_min INTEGER DEFAULT 75,
+    message_xp_max INTEGER DEFAULT 100,
+    voice_xp_min INTEGER DEFAULT 250,
+    voice_xp_max INTEGER DEFAULT 350,
+    reaction_xp_min INTEGER DEFAULT 75,
+    reaction_xp_max INTEGER DEFAULT 100,
+    daily_xp_cap INTEGER DEFAULT 15000,
+    xp_multiplier DECIMAL(3,2) DEFAULT 1.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-            // Create indexes for better performance
-            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_user_levels_total_xp" ON ${this.tables.userLevels}(guild_id, total_xp DESC)`);
-            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_user_levels_level" ON ${this.tables.userLevels}(guild_id, level DESC)`);
-            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_daily_xp_date" ON ${this.tables.dailyXP}(date)`);
-            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_daily_xp_user_date" ON ${this.tables.dailyXP}(user_id, guild_id, date)`);
-            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_voice_sessions_guild" ON ${this.tables.voiceSessions}(guild_id)`);
-            await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_voice_sessions_channel" ON ${this.tables.voiceSessions}(channel_id)`);
+-- PERFORMANCE INDEXES
+CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_user_levels_total_xp" ON "Leveling-Bot_user_levels"(guild_id, total_xp DESC);
+CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_user_levels_level" ON "Leveling-Bot_user_levels"(guild_id, level DESC);
+CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_daily_xp_date" ON "Leveling-Bot_daily_xp"(date);
+CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_daily_xp_user_date" ON "Leveling-Bot_daily_xp"(user_id, guild_id, date);
+CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_voice_sessions_guild" ON "Leveling-Bot_voice_sessions"(guild_id);
+CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_voice_sessions_channel" ON "Leveling-Bot_voice_sessions"(channel_id);
+CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_guild_settings_guild" ON "Leveling-Bot_guild_settings"(guild_id);
 
-            console.log('✅ Leveling-Bot database tables initialized successfully');
+-- DATA VALIDATION CONSTRAINTS
+ALTER TABLE "Leveling-Bot_user_levels" ADD CONSTRAINT IF NOT EXISTS "chk_Leveling-Bot_user_levels_xp_positive" CHECK (total_xp >= 0);
+ALTER TABLE "Leveling-Bot_user_levels" ADD CONSTRAINT IF NOT EXISTS "chk_Leveling-Bot_user_levels_level_positive" CHECK (level >= 0);
+ALTER TABLE "Leveling-Bot_daily_xp" ADD CONSTRAINT IF NOT EXISTS "chk_Leveling-Bot_daily_xp_positive" CHECK (total_xp >= 0 AND message_xp >= 0 AND voice_xp >= 0 AND reaction_xp >= 0);
+ALTER TABLE "Leveling-Bot_guild_settings" ADD CONSTRAINT IF NOT EXISTS "chk_Leveling-Bot_guild_settings_xp_positive" CHECK (message_xp_min > 0 AND message_xp_max > 0 AND voice_xp_min > 0 AND voice_xp_max > 0 AND reaction_xp_min > 0 AND reaction_xp_max > 0 AND daily_xp_cap > 0);
 
-        } catch (error) {
-            console.error('❌ Error initializing Leveling-Bot database tables:', error);
-            throw error;
-        }
-    }
+-- SAFE CLEANUP FUNCTION
+CREATE OR REPLACE FUNCTION "cleanup_old_Leveling-Bot_daily_xp"()
+RETURNS void AS $$
+BEGIN
+    DELETE FROM "Leveling-Bot_daily_xp" WHERE date < CURRENT_DATE - INTERVAL '30 days';
+    RAISE NOTICE 'Leveling-Bot: Cleaned up old daily XP records older than 30 days';
+END;
+$$ LANGUAGE plpgsql;
 
-    /**
-     * Get user XP data
-     */
-    async getUserXP(userId, guildId) {
-        try {
-            const result = await this.db.query(
-                `SELECT * FROM ${this.tables.userLevels} WHERE user_id = $1 AND guild_id = $2`,
-                [userId, guildId]
-            );
-            return result.rows[0] || null;
-        } catch (error) {
-            console.error('Error getting user XP:', error);
-            return null;
-        }
-    }
+-- SAFE AUTOMATIC CLEANUP TRIGGER
+CREATE OR REPLACE FUNCTION "trigger_cleanup_Leveling-Bot_daily_xp"()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF random() < 0.01 THEN -- 1% chance
+        PERFORM "cleanup_old_Leveling-Bot_daily_xp"();
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-    /**
-     * Update user XP and stats
-     */
-    async updateUserXP(userId, guildId, xpGain, source) {
-        try {
-            const sourceColumns = {
-                message: `messages = ${this.tables.userLevels}.messages + 1`,
-                reaction: `reactions = ${this.tables.userLevels}.reactions + 1`,
-                voice: `voice_time = ${this.tables.userLevels}.voice_time + 1`
-            };
+-- CREATE THE SAFE TRIGGER
+DROP TRIGGER IF EXISTS "Leveling-Bot_cleanup_trigger" ON "Leveling-Bot_daily_xp";
+CREATE TRIGGER "Leveling-Bot_cleanup_trigger" 
+    AFTER INSERT ON "Leveling-Bot_daily_xp"
+    FOR EACH ROW 
+    EXECUTE FUNCTION "trigger_cleanup_Leveling-Bot_daily_xp"();
 
-            const sourceColumn = sourceColumns[source] || '';
+-- USEFUL VIEWS FOR GUILD MANAGEMENT
+CREATE OR REPLACE VIEW "Leveling-Bot_current_daily_stats" AS
+SELECT 
+    dx.*,
+    ul.total_xp as lifetime_xp,
+    ul.level,
+    ul.messages as lifetime_messages,
+    ul.reactions as lifetime_reactions,
+    ul.voice_time as lifetime_voice_time
+FROM "Leveling-Bot_daily_xp" dx
+LEFT JOIN "Leveling-Bot_user_levels" ul ON dx.user_id = ul.user_id AND dx.guild_id = ul.guild_id
+WHERE dx.date = CURRENT_DATE;
 
-            const query = `
-                INSERT INTO ${this.tables.userLevels} (user_id, guild_id, total_xp, messages, reactions, voice_time)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (user_id, guild_id)
-                DO UPDATE SET
-                    total_xp = ${this.tables.userLevels}.total_xp + $3,
-                    ${sourceColumn ? sourceColumn + ',' : ''}
-                    updated_at = CURRENT_TIMESTAMP
-                RETURNING total_xp, level
-            `;
+-- VIEW FOR GUILD STATISTICS
+CREATE OR REPLACE VIEW "Leveling-Bot_guild_stats" AS
+SELECT 
+    gs.guild_id,
+    gs.levelup_channel,
+    gs.xp_log_channel,
+    gs.levelup_enabled,
+    gs.xp_log_enabled,
+    COUNT(DISTINCT ul.user_id) as total_users,
+    COUNT(DISTINCT vs.user_id) as active_voice_users,
+    MAX(ul.level) as highest_level,
+    SUM(ul.total_xp) as total_guild_xp,
+    AVG(ul.total_xp) as avg_user_xp
+FROM "Leveling-Bot_guild_settings" gs
+LEFT JOIN "Leveling-Bot_user_levels" ul ON gs.guild_id = ul.guild_id AND ul.total_xp > 0
+LEFT JOIN "Leveling-Bot_voice_sessions" vs ON gs.guild_id = vs.guild_id
+GROUP BY gs.guild_id, gs.levelup_channel, gs.xp_log_channel, gs.levelup_enabled, gs.xp_log_enabled;
 
-            const params = [
-                userId, guildId, xpGain,
-                source === 'message' ? 1 : 0,
-                source === 'reaction' ? 1 : 0,
-                source === 'voice' ? 1 : 0
-            ];
+-- SAMPLE QUERIES FOR TESTING
 
-            const result = await this.db.query(query, params);
-            return result.rows[0];
+-- Check if all Leveling-Bot tables exist
+-- SELECT tablename FROM pg_tables WHERE tablename LIKE 'Leveling-Bot_%' ORDER BY tablename;
 
-        } catch (error) {
-            console.error('Error updating user XP:', error);
-            return null;
-        }
-    }
+-- Get guild settings for a specific guild
+-- SELECT * FROM "Leveling-Bot_guild_settings" WHERE guild_id = 'YOUR_GUILD_ID';
 
-    /**
-     * Update user level
-     */
-    async updateUserLevel(userId, guildId, newLevel) {
-        try {
-            await this.db.query(
-                `UPDATE ${this.tables.userLevels} SET level = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2 AND guild_id = $3`,
-                [newLevel, userId, guildId]
-            );
-        } catch (error) {
-            console.error('Error updating user level:', error);
-        }
-    }
+-- Get top users in a guild with settings info
+-- SELECT ul.*, gs.levelup_channel, gs.xp_log_channel 
+-- FROM "Leveling-Bot_user_levels" ul 
+-- LEFT JOIN "Leveling-Bot_guild_settings" gs ON ul.guild_id = gs.guild_id 
+-- WHERE ul.guild_id = 'YOUR_GUILD_ID' 
+-- ORDER BY ul.total_xp DESC LIMIT 10;
 
-    /**
-     * Get daily XP for user
-     */
-    async getDailyXP(userId, guildId, date) {
-        try {
-            const result = await this.db.query(
-                `SELECT * FROM ${this.tables.dailyXP} WHERE user_id = $1 AND guild_id = $2 AND date = $3`,
-                [userId, guildId, date]
-            );
-            return result.rows[0] || { total_xp: 0, message_xp: 0, voice_xp: 0, reaction_xp: 0 };
-        } catch (error) {
-            console.error('Error getting daily XP:', error);
-            return { total_xp: 0, message_xp: 0, voice_xp: 0, reaction_xp: 0 };
-        }
-    }
+-- Get current daily XP for all users in a guild
+-- SELECT dx.*, ul.level FROM "Leveling-Bot_daily_xp" dx
+-- LEFT JOIN "Leveling-Bot_user_levels" ul ON dx.user_id = ul.user_id AND dx.guild_id = ul.guild_id
+-- WHERE dx.guild_id = 'YOUR_GUILD_ID' AND dx.date = CURRENT_DATE
+-- ORDER BY dx.total_xp DESC;
 
-    /**
-     * Update daily XP
-     */
-    async updateDailyXP(userId, guildId, date, xpGain, source) {
-        try {
-            const sourceColumns = {
-                message: `, message_xp = ${this.tables.dailyXP}.message_xp + $4`,
-                voice: `, voice_xp = ${this.tables.dailyXP}.voice_xp + $4`,
-                reaction: `, reaction_xp = ${this.tables.dailyXP}.reaction_xp + $4`
-            };
+-- GUILD SETTINGS MANAGEMENT FUNCTIONS
 
-            const sourceColumn = sourceColumns[source] || '';
+-- Function to get or create guild settings
+CREATE OR REPLACE FUNCTION "get_or_create_Leveling-Bot_guild_settings"(p_guild_id VARCHAR(20))
+RETURNS "Leveling-Bot_guild_settings" AS $$
+DECLARE
+    result "Leveling-Bot_guild_settings";
+BEGIN
+    -- Try to get existing settings
+    SELECT * INTO result FROM "Leveling-Bot_guild_settings" WHERE guild_id = p_guild_id;
+    
+    -- If not found, create with defaults
+    IF NOT FOUND THEN
+        INSERT INTO "Leveling-Bot_guild_settings" (guild_id)
+        VALUES (p_guild_id)
+        RETURNING * INTO result;
+    END IF;
+    
+    RETURN result;
+END;
+$$ LANGUAGE plpgsql;
 
-            const query = `
-                INSERT INTO ${this.tables.dailyXP} (user_id, guild_id, date, total_xp, message_xp, voice_xp, reaction_xp)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (user_id, guild_id, date)
-                DO UPDATE SET
-                    total_xp = ${this.tables.dailyXP}.total_xp + $4
-                    ${sourceColumn}
-                    , updated_at = CURRENT_TIMESTAMP
-                RETURNING total_xp
-            `;
+-- Function to update guild settings
+CREATE OR REPLACE FUNCTION "update_Leveling-Bot_guild_setting"(
+    p_guild_id VARCHAR(20),
+    p_setting_name VARCHAR(50),
+    p_setting_value TEXT
+)
+RETURNS BOOLEAN AS $$
+BEGIN
+    -- Ensure guild settings exist first
+    PERFORM "get_or_create_Leveling-Bot_guild_settings"(p_guild_id);
+    
+    -- Update specific setting based on setting name
+    CASE p_setting_name
+        WHEN 'levelup_channel' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET levelup_channel = p_setting_value, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'levelup_enabled' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET levelup_enabled = p_setting_value::BOOLEAN, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'levelup_ping_user' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET levelup_ping_user = p_setting_value::BOOLEAN, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'xp_log_channel' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET xp_log_channel = p_setting_value, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'xp_log_enabled' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET xp_log_enabled = p_setting_value::BOOLEAN, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'xp_log_messages' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET xp_log_messages = p_setting_value::BOOLEAN, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'xp_log_reactions' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET xp_log_reactions = p_setting_value::BOOLEAN, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'xp_log_voice' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET xp_log_voice = p_setting_value::BOOLEAN, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'xp_log_levelup' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET xp_log_levelup = p_setting_value::BOOLEAN, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'daily_xp_cap' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET daily_xp_cap = p_setting_value::INTEGER, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        WHEN 'xp_multiplier' THEN
+            UPDATE "Leveling-Bot_guild_settings" SET xp_multiplier = p_setting_value::DECIMAL, updated_at = CURRENT_TIMESTAMP WHERE guild_id = p_guild_id;
+        ELSE
+            RETURN FALSE; -- Unknown setting
+    END CASE;
+    
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
 
-            const params = [
-                userId, guildId, date, xpGain,
-                source === 'message' ? xpGain : 0,
-                source === 'voice' ? xpGain : 0,
-                source === 'reaction' ? xpGain : 0
-            ];
+-- MAINTENANCE COMMANDS (SAFE FOR SHARED DATABASE)
 
-            const result = await this.db.query(query, params);
-            return result.rows[0].total_xp;
+-- Clean up old daily XP records manually
+-- DELETE FROM "Leveling-Bot_daily_xp" WHERE date < CURRENT_DATE - INTERVAL '30 days';
 
-        } catch (error) {
-            console.error('Error updating daily XP:', error);
-            return 0;
-        }
-    }
+-- Update database statistics
+-- ANALYZE "Leveling-Bot_user_levels";
+-- ANALYZE "Leveling-Bot_daily_xp";
+-- ANALYZE "Leveling-Bot_voice_sessions";
+-- ANALYZE "Leveling-Bot_guild_settings";
 
-    /**
-     * Get leaderboard data
-     */
-    async getLeaderboard(guildId, limit = 50, offset = 0) {
-        try {
-            const result = await this.db.query(`
-                SELECT user_id, total_xp, level, messages, reactions, voice_time
-                FROM ${this.tables.userLevels} 
-                WHERE guild_id = $1 AND total_xp > 0
-                ORDER BY total_xp DESC 
-                LIMIT $2 OFFSET $3
-            `, [guildId, limit, offset]);
+-- Check Leveling-Bot table sizes
+-- SELECT 
+--     tablename,
+--     pg_size_pretty(pg_total_relation_size('"' || tablename || '"')) as size
+-- FROM pg_tables 
+-- WHERE tablename LIKE 'Leveling-Bot_%'
+-- ORDER BY pg_total_relation_size('"' || tablename || '"') DESC;
 
-            return result.rows;
-        } catch (error) {
-            console.error('Error getting leaderboard:', error);
-            return [];
-        }
-    }
-
-    /**
-     * Get user rank
-     */
-    async getUserRank(userId, guildId) {
-        try {
-            const result = await this.db.query(`
-                SELECT COUNT(*) + 1 as rank 
-                FROM ${this.tables.userLevels} 
-                WHERE guild_id = $1 AND total_xp > (
-                    SELECT COALESCE(total_xp, 0) FROM ${this.tables.userLevels} 
-                    WHERE user_id = $2 AND guild_id = $1
-                )
-            `, [guildId, userId]);
-
-            return result.rows[0]?.rank || null;
-        } catch (error) {
-            console.error('Error getting user rank:', error);
-            return null;
-        }
-    }
-
-    /**
-     * Voice session management - WITH LEVELING-BOT PREFIX
-     */
-    async setVoiceSession(userId, guildId, channelId, isMuted = false, isDeafened = false) {
-        try {
-            console.log(`[DB] Setting voice session for ${userId} in channel ${channelId}`);
-            
-            const result = await this.db.query(`
-                INSERT INTO ${this.tables.voiceSessions} (user_id, guild_id, channel_id, is_muted, is_deafened, join_time, last_xp_time)
-                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id, guild_id)
-                DO UPDATE SET
-                    channel_id = $3,
-                    is_muted = $4,
-                    is_deafened = $5,
-                    join_time = CURRENT_TIMESTAMP,
-                    last_xp_time = CURRENT_TIMESTAMP
-                RETURNING *
-            `, [userId, guildId, channelId, isMuted, isDeafened]);
-            
-            console.log(`[DB] Voice session set successfully for ${userId}`);
-            return result.rows[0];
-        } catch (error) {
-            console.error('Error setting voice session:', error);
-            return null;
-        }
-    }
-
-    async updateVoiceSession(userId, guildId, isMuted, isDeafened) {
-        try {
-            console.log(`[DB] Updating voice session for ${userId} - muted: ${isMuted}, deafened: ${isDeafened}`);
-            
-            const result = await this.db.query(`
-                UPDATE ${this.tables.voiceSessions} 
-                SET is_muted = $1, is_deafened = $2, last_xp_time = CURRENT_TIMESTAMP
-                WHERE user_id = $3 AND guild_id = $4
-                RETURNING *
-            `, [isMuted, isDeafened, userId, guildId]);
-            
-            console.log(`[DB] Voice session updated for ${userId}`);
-            return result.rows[0];
-        } catch (error) {
-            console.error('Error updating voice session:', error);
-            return null;
-        }
-    }
-
-    async removeVoiceSession(userId, guildId) {
-        try {
-            console.log(`[DB] Removing voice session for ${userId}`);
-            
-            const result = await this.db.query(
-                `DELETE FROM ${this.tables.voiceSessions} WHERE user_id = $1 AND guild_id = $2 RETURNING *`,
-                [userId, guildId]
-            );
-            
-            console.log(`[DB] Voice session removed for ${userId}`);
-            return result.rows[0];
-        } catch (error) {
-            console.error('Error removing voice session:', error);
-            return null;
-        }
-    }
-
-    async getVoiceSessions(guildId) {
-        try {
-            const result = await this.db.query(
-                `SELECT * FROM ${this.tables.voiceSessions} WHERE guild_id = $1`,
-                [guildId]
-            );
-            
-            console.log(`[DB] Retrieved ${result.rows.length} voice sessions for guild ${guildId}`);
-            return result.rows;
-        } catch (error) {
-            console.error('Error getting voice sessions:', error);
-            return [];
-        }
-    }
-
-    async getVoiceSession(userId, guildId) {
-        try {
-            const result = await this.db.query(
-                `SELECT * FROM ${this.tables.voiceSessions} WHERE user_id = $1 AND guild_id = $2`,
-                [userId, guildId]
-            );
-            return result.rows[0] || null;
-        } catch (error) {
-            console.error('Error getting voice session:', error);
-            return null;
-        }
-    }
-
-    /**
-     * Clean up old daily XP records (keep last 30 days) - SAFE FOR SHARED DATABASE
-     */
-    async cleanupOldDailyXP() {
-        try {
-            // SAFETY: Only affects Leveling-Bot prefixed table
-            const result = await this.db.query(
-                `DELETE FROM ${this.tables.dailyXP} WHERE date < CURRENT_DATE - INTERVAL '30 days'`
-            );
-            
-            if (result.rowCount > 0) {
-                console.log(`🧹 [Leveling-Bot] Cleaned up ${result.rowCount} old daily XP records (other bots unaffected)`);
-            }
-        } catch (error) {
-            console.error('[Leveling-Bot] Error cleaning up old daily XP:', error);
-        }
-    }
-
-    /**
-     * Clean up orphaned voice sessions - SAFE FOR SHARED DATABASE
-     */
-    async cleanupOrphanedVoiceSessions(client) {
-        try {
-            // SAFETY: Only queries Leveling-Bot prefixed table
-            const sessions = await this.db.query(`SELECT * FROM ${this.tables.voiceSessions}`);
-            let cleanedCount = 0;
-            
-            for (const session of sessions.rows) {
-                try {
-                    const guild = client.guilds.cache.get(session.guild_id);
-                    if (!guild) {
-                        // Guild doesn't exist, remove session (only Leveling-Bot session)
-                        await this.removeVoiceSession(session.user_id, session.guild_id);
-                        cleanedCount++;
-                        continue;
-                    }
-                    
-                    const member = await guild.members.fetch(session.user_id).catch(() => null);
-                    if (!member) {
-                        // Member not in guild, remove session (only Leveling-Bot session)
-                        await this.removeVoiceSession(session.user_id, session.guild_id);
-                        cleanedCount++;
-                        continue;
-                    }
-                    
-                    const voiceState = member.voice;
-                    if (!voiceState.channelId || voiceState.channelId !== session.channel_id) {
-                        // Member not in expected voice channel, remove session (only Leveling-Bot session)
-                        await this.removeVoiceSession(session.user_id, session.guild_id);
-                        cleanedCount++;
-                        continue;
-                    }
-                } catch (error) {
-                    console.error(`[Leveling-Bot] Error checking voice session for ${session.user_id}:`, error);
-                }
-            }
-            
-            if (cleanedCount > 0) {
-                console.log(`🧹 [Leveling-Bot] Cleaned up ${cleanedCount} orphaned voice sessions (other bots unaffected)`);
-            }
-        } catch (error) {
-            console.error('[Leveling-Bot] Error cleaning up orphaned voice sessions:', error);
-        }
-    }
-
-    /**
-     * Reset all daily XP for new day - SAFE FOR SHARED DATABASE
-     */
-    async resetDailyXP() {
-        try {
-            const today = new Date().toISOString().split('T')[0];
-            
-            // SAFETY: Only counts and deletes from Leveling-Bot prefixed table
-            const countResult = await this.db.query(`SELECT COUNT(*) FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
-            const recordsToDelete = countResult.rows[0].count;
-            
-            // Delete old records (only from Leveling-Bot table)
-            await this.db.query(`DELETE FROM ${this.tables.dailyXP} WHERE date < $1`, [today]);
-            
-            console.log(`✅ [Leveling-Bot] Daily XP reset complete - Removed ${recordsToDelete} old records (other bots unaffected)`);
-        } catch (error) {
-            console.error('[Leveling-Bot] Error resetting daily XP:', error);
-        }
-    }
-
-    /**
-     * Get database statistics - SAFE FOR SHARED DATABASE
-     */
-    async getDatabaseStats() {
-        try {
-            const stats = {};
-            
-            // SAFETY: Only queries Leveling-Bot prefixed tables
-            // User levels stats
-            const userLevelsResult = await this.db.query(`
-                SELECT 
-                    COUNT(*) as total_users,
-                    SUM(total_xp) as total_xp,
-                    AVG(total_xp) as avg_xp,
-                    MAX(total_xp) as max_xp,
-                    MAX(level) as max_level
-                FROM ${this.tables.userLevels} WHERE total_xp > 0
-            `);
-            stats.userLevels = userLevelsResult.rows[0];
-            
-            // Daily XP stats (Leveling-Bot only)
-            const dailyXPResult = await this.db.query(`
-                SELECT 
-                    COUNT(*) as total_records,
-                    COUNT(DISTINCT user_id) as active_users_today,
-                    SUM(total_xp) as total_daily_xp,
-                    AVG(total_xp) as avg_daily_xp
-                FROM ${this.tables.dailyXP} WHERE date = CURRENT_DATE
-            `);
-            stats.dailyXP = dailyXPResult.rows[0];
-            
-            // Voice sessions stats (Leveling-Bot only)
-            const voiceResult = await this.db.query(`SELECT COUNT(*) as active_sessions FROM ${this.tables.voiceSessions}`);
-            stats.voiceSessions = voiceResult.rows[0];
-            
-            return stats;
-        } catch (error) {
-            console.error('[Leveling-Bot] Error getting database stats:', error);
-            return {};
-        }
-    }
-
-    /**
-     * Cleanup and maintenance - SAFE FOR SHARED DATABASE
-     */
-    async cleanup() {
-        try {
-            // SAFETY: Only cleans up Leveling-Bot prefixed tables
-            await this.cleanupOldDailyXP();
-            console.log('🗄️ [Leveling-Bot] Database cleanup completed (other bots unaffected)');
-        } catch (error) {
-            console.error('[Leveling-Bot] Error during database cleanup:', error);
-        }
-    }
-}
-
-module.exports = DatabaseManager;
+-- BACKUP COMMANDS (ONLY LEVELING-BOT TABLES)
+-- pg_dump -h hostname -U username -d database_name -t "Leveling-Bot_user_levels" -t "Leveling-Bot_daily_xp" -t "Leveling-Bot_voice_sessions" -t "Leveling-Bot_guild_settings" > leveling-bot-backup.sql
