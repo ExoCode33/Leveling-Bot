@@ -283,4 +283,9 @@ module.exports = {
         }
         
         if (foundTiers === 0) {
-            tierInfo = 'No tier roles configured\
+            tierInfo = 'No tier roles configured\nTier roles provide increased daily XP caps';
+        }
+        
+        return tierInfo;
+    }
+};
