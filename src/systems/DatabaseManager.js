@@ -344,8 +344,7 @@ class DatabaseManager {
     async cleanup() {
         try {
             await this.cleanupOldDailyXP();
-            await this.db.end();
-            console.log('🗄️ Database connections closed');
+            console.log('🗄️ Database cleanup completed');
         } catch (error) {
             console.error('Error during database cleanup:', error);
         }
