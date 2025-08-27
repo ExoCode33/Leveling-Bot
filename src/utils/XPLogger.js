@@ -2,6 +2,7 @@ const { EmbedBuilder } = require('discord.js');
 
 /**
  * XPLogger - Handles XP activity logging to designated channels
+ * FIXED VERSION - Properly displays voice channel names instead of "Unknown"
  */
 class XPLogger {
     constructor(client) {
@@ -89,10 +90,13 @@ class XPLogger {
     }
 
     /**
-     * Create voice activity log embed
+     * Create voice activity log embed - FIXED TO PROPERLY SHOW CHANNEL NAME
      */
     createVoiceLogEmbed(embed, user, guildId, xpGain, info) {
         const guild = this.client.guilds.cache.get(guildId);
+        
+        // Get channel name from additionalInfo (passed from XPManager)
+        const channelName = info.channelName || 'Unknown';
         
         // Get daily cap information if available
         let dailyCapInfo = '';
@@ -104,7 +108,7 @@ class XPLogger {
         
         return embed
             .setTitle('🎤 VOICE ACTIVITY DETECTED')
-            .setDescription(`\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- VOICE CHANNEL: ${info.channelName || 'Unknown'}\n- XP AWARDED: +${xpGain}\n- NEW TOTAL: ${this.formatNumber(info.totalXP)}\n- CURRENT LEVEL: ${info.currentLevel || 0}${dailyCapInfo}\n- SOURCE: VOICE ACTIVITY\n\`\`\``);
+            .setDescription(`\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- VOICE CHANNEL: ${channelName}\n- XP AWARDED: +${xpGain}\n- NEW TOTAL: ${this.formatNumber(info.totalXP)}\n- CURRENT LEVEL: ${info.currentLevel || 0}${dailyCapInfo}\n- SOURCE: VOICE ACTIVITY\n\`\`\``);
     }
 
     /**
