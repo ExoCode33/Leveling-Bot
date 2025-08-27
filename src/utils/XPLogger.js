@@ -1,16 +1,19 @@
 const { EmbedBuilder } = require('discord.js');
 
 /**
- * XPLogger - Handles XP activity logging to designated channels
- * FIXED VERSION - Properly displays voice channel names instead of "Unknown"
+ * XPLogger - Enhanced XP activity logging with batching and daily cap progression
+ * NEW FEATURES: Batched voice logs per channel + Daily cap progress for all sources
  */
 class XPLogger {
     constructor(client) {
         this.client = client;
+        this.voiceLogBatch = new Map(); // Store voice activities for batching
+        this.batchTimer = null;
+        this.batchInterval = 30000; // 30 seconds
     }
 
     /**
-     * Log XP activity
+     * Log XP activity with batching for voice and daily cap progression
      */
     async logXPActivity(type, user, guildId, xpGain, additionalInfo = {}) {
         try {
@@ -25,12 +28,260 @@ class XPLogger {
             const channel = await this.client.channels.fetch(channelId).catch(() => null);
             if (!channel || !channel.isTextBased()) return;
 
-            const embed = this.createLogEmbed(type, user, guildId, xpGain, additionalInfo);
+            // Handle voice XP with batching
+            if (type === 'voice') {
+                await this.handleVoiceActivityBatching(user, guildId, xpGain, additionalInfo, channel);
+                return;
+            }
+
+            // Handle other XP types immediately with daily cap progress
+            const embed = await this.createEnhancedLogEmbed(type, user, guildId, xpGain, additionalInfo);
             await channel.send({ embeds: [embed] });
 
         } catch (error) {
             console.error('[XP LOG] Failed to send XP log:', error);
         }
+    }
+
+    /**
+     * Handle voice activity batching by channel
+     */
+    async handleVoiceActivityBatching(user, guildId, xpGain, additionalInfo, channel) {
+        const channelKey = `${guildId}-${additionalInfo.channelId || 'unknown'}`;
+        
+        // Initialize batch for this channel if it doesn't exist
+        if (!this.voiceLogBatch.has(channelKey)) {
+            this.voiceLogBatch.set(channelKey, {
+                guildId: guildId,
+                channelId: additionalInfo.channelId,
+                channelName: additionalInfo.channelName || 'Unknown Channel',
+                activities: [],
+                totalXP: 0,
+                startTime: new Date()
+            });
+        }
+
+        const batch = this.voiceLogBatch.get(channelKey);
+        
+        // Add activity to batch
+        batch.activities.push({
+            user: user,
+            xpGain: xpGain,
+            totalXP: additionalInfo.totalXP,
+            currentLevel: additionalInfo.currentLevel,
+            member: additionalInfo.member
+        });
+        
+        batch.totalXP += xpGain;
+
+        // Start batch timer if not already running
+        if (!this.batchTimer) {
+            this.batchTimer = setTimeout(() => {
+                this.processBatchedVoiceLogs(channel);
+            }, this.batchInterval);
+        }
+    }
+
+    /**
+     * Process and send batched voice logs
+     */
+    async processBatchedVoiceLogs(channel) {
+        try {
+            console.log(`[XP LOG] Processing ${this.voiceLogBatch.size} voice channel batches`);
+
+            for (const [channelKey, batch] of this.voiceLogBatch.entries()) {
+                if (batch.activities.length === 0) continue;
+
+                const embed = await this.createBatchedVoiceEmbed(batch);
+                await channel.send({ embeds: [embed] });
+            }
+
+            // Clear batch and timer
+            this.voiceLogBatch.clear();
+            this.batchTimer = null;
+
+        } catch (error) {
+            console.error('[XP LOG] Error processing batched voice logs:', error);
+        }
+    }
+
+    /**
+     * Create batched voice activity embed
+     */
+    async createBatchedVoiceEmbed(batch) {
+        const guild = this.client.guilds.cache.get(batch.guildId);
+        const duration = Math.round((new Date() - batch.startTime) / 1000);
+        
+        const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setAuthor({ 
+                name: '🔴 MARINE INTELLIGENCE BUREAU'
+            })
+            .setTitle(`🎤 VOICE CHANNEL ACTIVITY REPORT`)
+            .setDescription(`\`\`\`diff\n- SURVEILLANCE REPORT\n- LOCATION: ${batch.channelName}\n- GUILD: ${guild?.name || 'Unknown'}\n- DURATION: ${duration}s\n- TOTAL PARTICIPANTS: ${batch.activities.length}\n- COMBINED XP AWARDED: +${batch.totalXP.toLocaleString()}\n\`\`\``)
+            .setTimestamp()
+            .setFooter({ text: '⚓ Marine Intelligence Division • Voice Activity Monitor' });
+
+        // Group activities by user to avoid spam
+        const userActivities = new Map();
+        
+        for (const activity of batch.activities) {
+            const userId = activity.user.id;
+            if (!userActivities.has(userId)) {
+                userActivities.set(userId, {
+                    user: activity.user,
+                    totalXP: 0,
+                    sessions: 0,
+                    finalLevel: activity.currentLevel,
+                    finalTotalXP: activity.totalXP,
+                    member: activity.member
+                });
+            }
+            
+            const userActivity = userActivities.get(userId);
+            userActivity.totalXP += activity.xpGain;
+            userActivity.sessions += 1;
+            userActivity.finalLevel = activity.currentLevel; // Keep latest level
+            userActivity.finalTotalXP = activity.totalXP; // Keep latest total
+        }
+
+        // Add participant details with daily cap progress
+        let participantDetails = '';
+        let participantCount = 0;
+
+        for (const [userId, userActivity] of userActivities) {
+            participantCount++;
+            
+            // Get daily cap progress for this user
+            let dailyProgress = '';
+            try {
+                if (userActivity.member && this.client.xpManager?.dailyCapManager) {
+                    const dailyStats = await this.client.xpManager.dailyCapManager.getDailyStats(userId, batch.guildId, userActivity.member);
+                    const percentage = Math.min(100, dailyStats.percentage);
+                    const progressBar = this.createProgressBar(dailyStats.totalXP, dailyStats.dailyCap, 10);
+                    dailyProgress = `\n    Daily: ${dailyStats.totalXP.toLocaleString()}/${dailyStats.dailyCap.toLocaleString()} (${percentage}%) ${progressBar}`;
+                }
+            } catch (error) {
+                // Silently handle errors
+            }
+
+            participantDetails += `**${userActivity.user.username}** (+${userActivity.totalXP} XP)\n`;
+            participantDetails += `    Level: ${userActivity.finalLevel} | Total: ${userActivity.finalTotalXP.toLocaleString()}${dailyProgress}\n\n`;
+
+            // Limit to prevent embed size issues
+            if (participantCount >= 8) {
+                const remaining = userActivities.size - participantCount;
+                if (remaining > 0) {
+                    participantDetails += `*...and ${remaining} more participants*`;
+                }
+                break;
+            }
+        }
+
+        if (participantDetails) {
+            embed.addFields({
+                name: '👥 PARTICIPANT ACTIVITY',
+                value: participantDetails.trim(),
+                inline: false
+            });
+        }
+
+        return embed;
+    }
+
+    /**
+     * Create enhanced log embed with daily cap progression
+     */
+    async createEnhancedLogEmbed(type, user, guildId, xpGain, additionalInfo) {
+        const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setAuthor({ 
+                name: '🔴 MARINE INTELLIGENCE BUREAU',
+                iconURL: user.displayAvatarURL({ size: 32 })
+            })
+            .setTimestamp()
+            .setFooter({ text: '⚓ Marine Intelligence Division • Activity Monitor' });
+
+        const guild = this.client.guilds.cache.get(guildId);
+
+        // Base information
+        let description = `\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- XP AWARDED: +${xpGain}\n- NEW TOTAL: ${this.formatNumber(additionalInfo.totalXP)}\n- CURRENT LEVEL: ${additionalInfo.currentLevel || 0}\n- SOURCE: ${type.toUpperCase()}\n\`\`\``;
+
+        // Add daily cap progression
+        try {
+            if (additionalInfo.member && this.client.xpManager?.dailyCapManager) {
+                const dailyStats = await this.client.xpManager.dailyCapManager.getDailyStats(user.id, guildId, additionalInfo.member);
+                
+                const progressBar = this.createProgressBar(dailyStats.totalXP, dailyStats.dailyCap, 20);
+                const percentage = Math.min(100, dailyStats.percentage);
+                
+                // Determine tier info
+                let tierInfo = 'Standard';
+                if (dailyStats.tierLevel > 0) {
+                    tierInfo = `Tier ${dailyStats.tierLevel}`;
+                }
+
+                embed.addFields({
+                    name: '📊 DAILY PROGRESS',
+                    value: `**Cap:** ${dailyStats.dailyCap.toLocaleString()} XP (${tierInfo})\n**Used:** ${dailyStats.totalXP.toLocaleString()} XP (${percentage}%)\n**Remaining:** ${dailyStats.remaining.toLocaleString()} XP\n\n${progressBar}`,
+                    inline: false
+                });
+
+                // Add breakdown if available
+                if (dailyStats.messageXP > 0 || dailyStats.voiceXP > 0 || dailyStats.reactionXP > 0) {
+                    embed.addFields({
+                        name: '📈 TODAY\'S SOURCES',
+                        value: `💬 Messages: ${dailyStats.messageXP.toLocaleString()} XP\n🎤 Voice: ${dailyStats.voiceXP.toLocaleString()} XP\n👍 Reactions: ${dailyStats.reactionXP.toLocaleString()} XP`,
+                        inline: true
+                    });
+                }
+
+                // Add warning if near cap
+                if (percentage >= 90) {
+                    embed.addFields({
+                        name: '⚠️ WARNING',
+                        value: dailyStats.isAtCap ? 
+                            '```diff\n- DAILY CAP REACHED\n- No more XP until reset\n```' : 
+                            '```diff\n! APPROACHING DAILY CAP\n! Limited XP remaining\n```',
+                        inline: false
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('[XP LOG] Error adding daily progress:', error);
+        }
+
+        // Set title based on type
+        switch (type) {
+            case 'message':
+                embed.setTitle('💬 MESSAGE ACTIVITY DETECTED');
+                break;
+            case 'reaction':
+                embed.setTitle('👍 REACTION ACTIVITY DETECTED');
+                break;
+            case 'levelup':
+                embed.setTitle('⚠️ THREAT LEVEL INCREASED ⚠️');
+                // Add level up specific info
+                const oldLevel = additionalInfo.oldLevel || 0;
+                const newLevel = additionalInfo.currentLevel || 0;
+                
+                if (oldLevel !== newLevel) {
+                    const BountyCalculator = require('./BountyCalculator');
+                    const bountyCalc = new BountyCalculator();
+                    const oldBounty = bountyCalc.getBountyForLevel(oldLevel);
+                    const newBounty = bountyCalc.getBountyForLevel(newLevel);
+                    const bountyIncrease = newBounty - oldBounty;
+
+                    description = `\`\`\`diff\n- BOUNTY UPDATE CONFIRMED\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- LEVEL PROGRESSION: ${oldLevel} → ${newLevel}\n- TOTAL XP: ${this.formatNumber(additionalInfo.totalXP)}\n- OLD BOUNTY: ฿${oldBounty.toLocaleString()}\n- NEW BOUNTY: ฿${newBounty.toLocaleString()}\n- BOUNTY INCREASE: +฿${bountyIncrease.toLocaleString()}\n- XP SOURCE: ${(additionalInfo.source || 'unknown').toUpperCase()}\n\`\`\``;
+                }
+                break;
+            default:
+                embed.setTitle(`${type.toUpperCase()} ACTIVITY DETECTED`);
+                break;
+        }
+
+        embed.setDescription(description);
+        return embed;
     }
 
     /**
@@ -52,107 +303,6 @@ class XPLogger {
     }
 
     /**
-     * Create log embed based on type
-     */
-    createLogEmbed(type, user, guildId, xpGain, additionalInfo) {
-        const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setAuthor({ 
-                name: '🔴 MARINE INTELLIGENCE BUREAU',
-                iconURL: user.displayAvatarURL({ size: 32 })
-            })
-            .setTimestamp()
-            .setFooter({ text: '⚓ Marine Intelligence Division • Activity Monitor' });
-
-        switch (type) {
-            case 'message':
-                return this.createMessageLogEmbed(embed, user, guildId, xpGain, additionalInfo);
-            case 'voice':
-                return this.createVoiceLogEmbed(embed, user, guildId, xpGain, additionalInfo);
-            case 'reaction':
-                return this.createReactionLogEmbed(embed, user, guildId, xpGain, additionalInfo);
-            case 'levelup':
-                return this.createLevelUpLogEmbed(embed, user, guildId, xpGain, additionalInfo);
-            default:
-                return this.createGenericLogEmbed(embed, type, user, guildId, xpGain, additionalInfo);
-        }
-    }
-
-    /**
-     * Create message activity log embed
-     */
-    createMessageLogEmbed(embed, user, guildId, xpGain, info) {
-        const guild = this.client.guilds.cache.get(guildId);
-        
-        return embed
-            .setTitle('💬 MESSAGE ACTIVITY DETECTED')
-            .setDescription(`\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- XP AWARDED: +${xpGain}\n- NEW TOTAL: ${this.formatNumber(info.totalXP)}\n- CURRENT LEVEL: ${info.currentLevel || 0}\n- SOURCE: MESSAGE ACTIVITY\n\`\`\``);
-    }
-
-    /**
-     * Create voice activity log embed - FIXED TO PROPERLY SHOW CHANNEL NAME
-     */
-    createVoiceLogEmbed(embed, user, guildId, xpGain, info) {
-        const guild = this.client.guilds.cache.get(guildId);
-        
-        // Get channel name from additionalInfo (passed from XPManager)
-        const channelName = info.channelName || 'Unknown';
-        
-        // Get daily cap information if available
-        let dailyCapInfo = '';
-        if (info.dailyStats) {
-            const stats = info.dailyStats;
-            const percentage = Math.round((stats.totalXP / stats.dailyCap) * 100);
-            dailyCapInfo = `\n- DAILY XP: ${stats.totalXP.toLocaleString()}/${stats.dailyCap.toLocaleString()} (${percentage}%)\n- REMAINING: ${stats.remaining.toLocaleString()} XP`;
-        }
-        
-        return embed
-            .setTitle('🎤 VOICE ACTIVITY DETECTED')
-            .setDescription(`\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- VOICE CHANNEL: ${channelName}\n- XP AWARDED: +${xpGain}\n- NEW TOTAL: ${this.formatNumber(info.totalXP)}\n- CURRENT LEVEL: ${info.currentLevel || 0}${dailyCapInfo}\n- SOURCE: VOICE ACTIVITY\n\`\`\``);
-    }
-
-    /**
-     * Create reaction activity log embed
-     */
-    createReactionLogEmbed(embed, user, guildId, xpGain, info) {
-        const guild = this.client.guilds.cache.get(guildId);
-        
-        return embed
-            .setTitle('👍 REACTION ACTIVITY DETECTED')
-            .setDescription(`\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- XP AWARDED: +${xpGain}\n- NEW TOTAL: ${this.formatNumber(info.totalXP)}\n- CURRENT LEVEL: ${info.currentLevel || 0}\n- SOURCE: REACTION ACTIVITY\n\`\`\``);
-    }
-
-    /**
-     * Create level up log embed
-     */
-    createLevelUpLogEmbed(embed, user, guildId, xpGain, info) {
-        const guild = this.client.guilds.cache.get(guildId);
-        const BountyCalculator = require('./BountyCalculator');
-        const bountyCalc = new BountyCalculator();
-        
-        const oldLevel = info.oldLevel || 0;
-        const newLevel = info.currentLevel || 0;
-        const oldBounty = bountyCalc.getBountyForLevel(oldLevel);
-        const newBounty = bountyCalc.getBountyForLevel(newLevel);
-        const bountyIncrease = newBounty - oldBounty;
-        
-        return embed
-            .setTitle('⚠️ THREAT LEVEL INCREASED ⚠️')
-            .setDescription(`\`\`\`diff\n- BOUNTY UPDATE CONFIRMED\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- LEVEL PROGRESSION: ${oldLevel} → ${newLevel}\n- TOTAL XP: ${this.formatNumber(info.totalXP)}\n- OLD BOUNTY: ฿${oldBounty.toLocaleString()}\n- NEW BOUNTY: ฿${newBounty.toLocaleString()}\n- BOUNTY INCREASE: +฿${bountyIncrease.toLocaleString()}\n- XP SOURCE: ${(info.source || 'unknown').toUpperCase()}\n${info.roleReward ? `- ROLE AWARDED: ${info.roleReward}\n` : ''}\`\`\``);
-    }
-
-    /**
-     * Create generic activity log embed
-     */
-    createGenericLogEmbed(embed, type, user, guildId, xpGain, info) {
-        const guild = this.client.guilds.cache.get(guildId);
-        
-        return embed
-            .setTitle(`${type.toUpperCase()} ACTIVITY DETECTED`)
-            .setDescription(`\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- XP AWARDED: +${xpGain}\n- NEW TOTAL: ${this.formatNumber(info.totalXP)}\n- CURRENT LEVEL: ${info.currentLevel || 0}\n- SOURCE: ${type.toUpperCase()}\n\`\`\``);
-    }
-
-    /**
      * Format number for display
      */
     formatNumber(num) {
@@ -161,7 +311,7 @@ class XPLogger {
     }
 
     /**
-     * Create progress bar for logging
+     * Create progress bar for display
      */
     createProgressBar(current, max, length = 20) {
         if (max === 0) return '░'.repeat(length);
@@ -198,7 +348,7 @@ class XPLogger {
                     iconURL: user.displayAvatarURL({ size: 32 })
                 })
                 .setTitle('🚨 DAILY XP CAP REACHED')
-                .setDescription(`\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- CAP REACHED: ${capAmount.toLocaleString()} XP\n- CAP TYPE: ${capType}\n- STATUS: No more XP can be gained today\n- NEXT RESET: Check /daily-stats\n\`\`\``)
+                .setDescription(`\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- CAP REACHED: ${capAmount.toLocaleString()} XP\n- CAP TYPE: ${capType}\n- STATUS: No more XP can be gained today\n- NEXT RESET: Check daily stats\n\`\`\``)
                 .setTimestamp()
                 .setFooter({ text: '⚓ Marine Intelligence Division • Daily Cap System' });
 
@@ -274,12 +424,33 @@ class XPLogger {
     }
 
     /**
+     * Force process any pending batched voice logs
+     */
+    async forceProcessBatch() {
+        if (this.batchTimer) {
+            clearTimeout(this.batchTimer);
+            this.batchTimer = null;
+        }
+
+        if (this.voiceLogBatch.size > 0) {
+            const channelId = process.env.XP_LOG_CHANNEL;
+            if (channelId) {
+                const channel = await this.client.channels.fetch(channelId).catch(() => null);
+                if (channel) {
+                    await this.processBatchedVoiceLogs(channel);
+                }
+            }
+        }
+    }
+
+    /**
      * Get logging configuration
      */
     getLoggingConfig() {
         return {
             enabled: process.env.XP_LOG_ENABLED === 'true',
             channel: process.env.XP_LOG_CHANNEL || null,
+            batchInterval: this.batchInterval / 1000, // Convert to seconds for display
             types: {
                 messages: process.env.XP_LOG_MESSAGES === 'true',
                 voice: process.env.XP_LOG_VOICE === 'true',
@@ -287,6 +458,15 @@ class XPLogger {
                 levelup: process.env.XP_LOG_LEVELUP === 'true'
             }
         };
+    }
+
+    /**
+     * Cleanup on shutdown
+     */
+    async cleanup() {
+        console.log('[XP LOG] Processing final batched logs...');
+        await this.forceProcessBatch();
+        console.log('[XP LOG] Cleanup complete');
     }
 }
 
