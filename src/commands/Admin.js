@@ -512,7 +512,7 @@ module.exports = {
                     });
                 }
 
-                // Add cap status
+                // Add cap status with proper reset time calculation
                 if (daily.isAtCap) {
                     embed.addFields({
                         name: '🚫 Daily Cap Status',
@@ -520,15 +520,12 @@ module.exports = {
                         inline: false
                     });
                 } else {
-                    const nextReset = new Date();
-                    nextReset.setHours(19, 35, 0, 0); // 7:35 PM EDT
-                    if (nextReset.getTime() <= Date.now()) {
-                        nextReset.setDate(nextReset.getDate() + 1);
-                    }
+                    // Calculate next reset time properly using the same logic as DailyCapManager
+                    const nextResetTimestamp = this.calculateNextResetTimestamp();
                     
                     embed.addFields({
                         name: '✅ Daily Cap Status',
-                        value: `\`\`\`diff\n+ CAN STILL GAIN XP\n+ Remaining: ${daily.remaining.toLocaleString()} XP\n+ Next Reset: <t:${Math.floor(nextReset.getTime() / 1000)}:R>\n\`\`\``,
+                        value: `\`\`\`diff\n+ CAN STILL GAIN XP\n+ Remaining: ${daily.remaining.toLocaleString()} XP\n+ Next Reset: <t:${nextResetTimestamp}:R>\n\`\`\``,
                         inline: false
                     });
                 }
@@ -578,5 +575,51 @@ module.exports = {
                 content: '❌ **Operation Failed**\n\nFailed to perform daily reset. Please try again.'
             });
         }
+    },
+
+    /**
+     * Calculate next reset timestamp (matches DailyCapManager logic)
+     */
+    calculateNextResetTimestamp() {
+        const now = new Date();
+        const resetHour = parseInt(process.env.DAILY_RESET_HOUR_EDT) || 19;
+        const resetMinute = parseInt(process.env.DAILY_RESET_MINUTE_EDT) || 35;
+        
+        // Check if current time is EDT or EST
+        const isEDT = this.isEDT(now);
+        const edtOffset = isEDT ? -4 : -5;
+        
+        // Convert current time to EDT/EST
+        const edtNow = new Date(now.getTime() + (edtOffset * 60 * 60 * 1000));
+        
+        // Set up next reset time in EDT/EST
+        let nextReset = new Date(edtNow);
+        nextReset.setHours(resetHour, resetMinute, 0, 0);
+        
+        // If reset time has passed today, schedule for tomorrow
+        if (edtNow.getTime() >= nextReset.getTime()) {
+            nextReset.setDate(nextReset.getDate() + 1);
+        }
+        
+        // Convert back to UTC for Discord timestamp
+        const utcReset = new Date(nextReset.getTime() - (edtOffset * 60 * 60 * 1000));
+        return Math.floor(utcReset.getTime() / 1000);
+    },
+
+    /**
+     * Check if date is EDT (Eastern Daylight Time)
+     */
+    isEDT(date) {
+        const year = date.getFullYear();
+        
+        // Second Sunday in March
+        const marchSecondSunday = new Date(year, 2, 8);
+        marchSecondSunday.setDate(marchSecondSunday.getDate() + (7 - marchSecondSunday.getDay()) % 7);
+        
+        // First Sunday in November  
+        const novemberFirstSunday = new Date(year, 10, 1);
+        novemberFirstSunday.setDate(novemberFirstSunday.getDate() + (7 - novemberFirstSunday.getDay()) % 7);
+        
+        return date >= marchSecondSunday && date < novemberFirstSunday;
     }
 };
