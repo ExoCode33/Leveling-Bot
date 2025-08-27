@@ -1,5 +1,4 @@
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
-const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 
@@ -7,17 +6,20 @@ const path = require('path');
 require('dotenv').config();
 
 // Import core systems
+console.log('📁 Loading Connection Manager...');
+const ConnectionManager = require('./src/systems/ConnectionManager');
+
 console.log('📁 Loading DatabaseManager...');
 const DatabaseManager = require('./src/systems/DatabaseManager');
-console.log('✅ DatabaseManager loaded:', typeof DatabaseManager);
+
+console.log('📁 Loading RedisCacheManager...');
+const RedisCacheManager = require('./src/systems/RedisCacheManager');
 
 console.log('📁 Loading XPManager...');
 const XPManager = require('./src/systems/XPManager');
-console.log('✅ XPManager loaded');
 
 console.log('📁 Loading CommandLoader...');
 const { loadCommands, registerSlashCommands } = require('./src/utils/CommandLoader');
-console.log('✅ CommandLoader loaded');
 
 // Configuration validation
 const requiredEnvVars = ['DISCORD_TOKEN', 'CLIENT_ID', 'DATABASE_URL'];
@@ -41,57 +43,49 @@ const client = new Client({
 });
 
 // Global managers
+let connectionManager;
 let databaseManager;
+let cacheManager;
 let xpManager;
 
-// Initialize database connection
-async function initializeDatabase() {
+// Initialize all connections and systems
+async function initializeBot() {
     try {
-        console.log('🗄️ Connecting to PostgreSQL...');
+        console.log('🚀 Starting One Piece XP Bot initialization...');
         
-        const db = new Pool({
-            connectionString: process.env.DATABASE_URL,
-            ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-        });
+        // Initialize connection manager first
+        connectionManager = new ConnectionManager();
+        const connections = await connectionManager.initialize();
         
-        // Test connection
-        const testClient = await db.connect();
-        const result = await testClient.query('SELECT NOW()');
-        console.log(`✅ PostgreSQL connected at ${result.rows[0].now}`);
-        testClient.release();
+        console.log('📊 Connection Status:');
+        console.log(`   PostgreSQL: ${connections.postgres ? '✅ Connected' : '❌ Failed'}`);
+        console.log(`   Redis: ${connections.redis ? '✅ Connected' : '⚠️ Fallback Mode'}`);
         
-        // Create DatabaseManager instance
-        console.log('🔧 Creating DatabaseManager instance...');
-        databaseManager = new DatabaseManager(db);
-        console.log('📋 DatabaseManager created successfully');
-        
-        // Check if initializeTables method exists
-        if (typeof databaseManager.initializeTables !== 'function') {
-            console.error('❌ DatabaseManager.initializeTables is not a function!');
-            console.log('Available methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(databaseManager)));
-            throw new Error('DatabaseManager.initializeTables method not found');
+        if (!connections.postgres) {
+            throw new Error('PostgreSQL connection required for bot operation');
         }
         
+        // Initialize database manager
+        const db = connectionManager.getPostgreSQL();
+        databaseManager = new DatabaseManager(db);
         console.log('📋 Initializing database tables...');
         await databaseManager.initializeTables();
         console.log('✅ Database tables initialized');
         
-        return db;
-    } catch (error) {
-        console.error('❌ Database connection failed:', error.message);
-        throw error;
-    }
-}
-
-// Initialize bot
-async function initializeBot() {
-    try {
-        // Initialize database
-        const db = await initializeDatabase();
+        // Initialize cache manager (works with or without Redis)
+        const redis = connectionManager.getRedis();
+        if (redis) {
+            cacheManager = new RedisCacheManager(redis, connectionManager);
+            console.log('✅ Redis cache manager initialized');
+        } else {
+            cacheManager = new RedisCacheManager(null, connectionManager); // Fallback mode
+            console.log('⚠️ Cache manager initialized in fallback mode');
+        }
         
-        // Initialize XP manager
-        xpManager = new XPManager(client, db);
+        // Initialize XP manager with cache support
+        xpManager = new XPManager(client, db, cacheManager);
         await xpManager.initialize();
+        console.log('✅ XP Manager initialized');
         
         // Load commands
         client.commands = new Collection();
@@ -104,18 +98,54 @@ async function initializeBot() {
         
         console.log('✅ Bot initialization complete');
         
+        // Display connection health
+        displayHealthStatus();
+        
     } catch (error) {
         console.error('❌ Bot initialization failed:', error);
         process.exit(1);
     }
 }
 
+// Display connection health status
+function displayHealthStatus() {
+    const health = connectionManager.getHealthStatus();
+    
+    console.log('\n📊 SYSTEM HEALTH STATUS:');
+    console.log('┌─────────────────────────────────────────┐');
+    console.log('│            CONNECTION STATUS            │');
+    console.log('├─────────────────────────────────────────┤');
+    console.log(`│ PostgreSQL: ${health.postgresql.status.padEnd(25)} │`);
+    console.log(`│ Redis:      ${health.redis.status.padEnd(25)} │`);
+    console.log(`│ Cache:      ${health.cache.type.padEnd(25)} │`);
+    console.log('└─────────────────────────────────────────┘');
+    
+    if (health.redis.fallbackActive) {
+        console.log('⚠️  NOTICE: Redis unavailable - using in-memory fallback');
+        console.log('   • Bot is fully functional but without caching optimizations');
+        console.log('   • Canvas generation will be slower');
+        console.log('   • User stats queries will hit database directly');
+    }
+    console.log('');
+}
+
 // Bot ready event
 client.once('ready', async () => {
-    console.log(`🏴‍☠️ One Piece XP Bot is ready!`);
+    console.log('🏴‍☠️ ═══════════════════════════════════════');
+    console.log('🏴‍☠️           ONE PIECE XP BOT');
+    console.log('🏴‍☠️ ═══════════════════════════────────────');
     console.log(`⚓ Logged in as ${client.user.tag}`);
     console.log(`🏴‍☠️ Serving ${client.guilds.cache.size} server(s)`);
+    console.log(`🎯 Commands loaded: ${client.commands.size}`);
+    
+    const health = connectionManager.getHealthStatus();
+    console.log(`📊 PostgreSQL: ${health.postgresql.status}`);
+    console.log(`🔴 Redis: ${health.redis.status}`);
+    console.log(`💾 Cache: ${health.cache.type}`);
+    
+    console.log('🏴‍☠️ ═══════════════════════════════════════');
     console.log('🎯 All systems operational!');
+    console.log('🏴‍☠️ ═══════════════════════════════════════');
 });
 
 // Message event
@@ -127,10 +157,64 @@ client.on('messageCreate', async (message) => {
         await xpManager.handleMessageXP(message);
     }
     
-    // Legacy ping command for testing
+    // Legacy ping command for testing connections
     if (message.content === '!ping') {
         const ping = Date.now() - message.createdTimestamp;
-        await message.reply(`🏴‍☠️ **Pong!** \n📡 Bot Latency: \`${ping}ms\`\n💓 API Latency: \`${Math.round(client.ws.ping)}ms\``);
+        const health = connectionManager.getHealthStatus();
+        
+        const embed = {
+            color: 0xFF0000,
+            title: '🏴‍☠️ **Marine Intelligence System Status**',
+            description: '```diff\n- SYSTEM DIAGNOSTICS REPORT\n```',
+            fields: [
+                {
+                    name: '📡 **Latency**',
+                    value: `**Bot:** \`${ping}ms\`\n**API:** \`${Math.round(client.ws.ping)}ms\``,
+                    inline: true
+                },
+                {
+                    name: '🗄️ **Database**',
+                    value: `**PostgreSQL:** ${health.postgresql.status}\n**Cache:** ${health.cache.type}`,
+                    inline: true
+                },
+                {
+                    name: '⚙️ **Performance**',
+                    value: `**Mode:** ${health.redis.connected ? 'Optimized' : 'Standard'}\n**Fallback:** ${health.redis.fallbackActive ? 'Active' : 'Inactive'}`,
+                    inline: true
+                }
+            ],
+            footer: { text: '⚓ Marine Intelligence Division • System Monitor' },
+            timestamp: new Date().toISOString()
+        };
+        
+        await message.reply({ embeds: [embed] });
+    }
+    
+    // Admin health check command
+    if (message.content === '!health' && message.author.id === process.env.ADMIN_USER_ID) {
+        const testResults = await connectionManager.testConnections();
+        const health = connectionManager.getHealthStatus();
+        
+        let healthDescription = '```diff\n';
+        healthDescription += testResults.postgresql ? '+ PostgreSQL: Connection Test Passed\n' : '- PostgreSQL: Connection Test Failed\n';
+        healthDescription += testResults.redis ? '+ Redis: Connection Test Passed\n' : '! Redis: Using Fallback Mode\n';
+        healthDescription += '```';
+        
+        const embed = {
+            color: testResults.postgresql ? 0x00FF00 : 0xFF0000,
+            title: '🏥 **System Health Check**',
+            description: healthDescription,
+            fields: [
+                {
+                    name: '📊 **Detailed Status**',
+                    value: `**PostgreSQL:** ${health.postgresql.status}\n**Redis:** ${health.redis.status}\n**Cache:** ${health.cache.type}`,
+                    inline: false
+                }
+            ],
+            footer: { text: `Test completed at ${testResults.timestamp}` }
+        };
+        
+        await message.reply({ embeds: [embed] });
     }
 });
 
@@ -187,9 +271,19 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 }
             }
             
-            // If tier roles changed, handle daily cap adjustment
+            // If tier roles changed, handle daily cap adjustment and cache invalidation
             if (tierRoleChanged && xpManager && xpManager.dailyCapManager) {
                 await xpManager.dailyCapManager.handleRoleChange(newMember, oldRoles, newRoles);
+                
+                // Invalidate cache for this user's daily progress
+                if (cacheManager) {
+                    const currentDate = cacheManager.getCurrentDateKey();
+                    await cacheManager.invalidateUserDailyProgress(
+                        newMember.user.id, 
+                        newMember.guild.id, 
+                        currentDate
+                    );
+                }
             }
         }
     } catch (error) {
@@ -204,7 +298,12 @@ client.on('interactionCreate', async (interaction) => {
         if (!command) return;
 
         try {
-            await command.execute(interaction, { xpManager, databaseManager });
+            await command.execute(interaction, { 
+                xpManager, 
+                databaseManager, 
+                cacheManager,
+                connectionManager 
+            });
         } catch (error) {
             console.error(`Error executing command ${interaction.commandName}:`, error);
             
@@ -232,7 +331,12 @@ client.on('interactionCreate', async (interaction) => {
                 };
                 
                 try {
-                    await leaderboardCommand.execute(mockInteraction, { xpManager, databaseManager });
+                    await leaderboardCommand.execute(mockInteraction, { 
+                        xpManager, 
+                        databaseManager, 
+                        cacheManager,
+                        connectionManager 
+                    });
                 } catch (error) {
                     console.error('Error handling leaderboard button:', error);
                     await interaction.reply({ 
@@ -256,6 +360,12 @@ client.on('warn', warning => {
 
 process.on('unhandledRejection', error => {
     console.error('❌ Unhandled promise rejection:', error);
+    
+    // If it's a connection error, try to reconnect
+    if (error.message && error.message.includes('Redis')) {
+        console.log('🔄 Attempting Redis reconnection...');
+        connectionManager?.reconnectRedis();
+    }
 });
 
 process.on('uncaughtException', error => {
@@ -275,8 +385,12 @@ async function gracefulShutdown() {
             await xpManager.cleanup();
         }
         
-        if (databaseManager) {
-            await databaseManager.cleanup();
+        if (cacheManager) {
+            await cacheManager.cleanup();
+        }
+        
+        if (connectionManager) {
+            await connectionManager.shutdown();
         }
         
         client.destroy();
@@ -288,6 +402,27 @@ async function gracefulShutdown() {
     process.exit(0);
 }
 
+// Periodic health checks (every 5 minutes)
+setInterval(async () => {
+    try {
+        if (connectionManager) {
+            const health = connectionManager.getHealthStatus();
+            
+            // Log status if there are issues
+            if (!health.postgresql.connected) {
+                console.error('❌ PostgreSQL connection lost!');
+            }
+            
+            if (!health.redis.connected && connectionManager.isRedisAvailable()) {
+                console.warn('⚠️ Redis connection lost, attempting reconnection...');
+                await connectionManager.reconnectRedis();
+            }
+        }
+    } catch (error) {
+        console.error('❌ Health check error:', error);
+    }
+}, 300000); // 5 minutes
+
 // Start the bot
 async function startBot() {
     console.log('🚀 Starting One Piece XP Bot...');
@@ -297,7 +432,13 @@ async function startBot() {
 }
 
 // Export for other modules
-module.exports = { client, databaseManager, xpManager };
+module.exports = { 
+    client, 
+    databaseManager, 
+    xpManager, 
+    cacheManager, 
+    connectionManager 
+};
 
 // Start the bot
 startBot().catch(console.error);
