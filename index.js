@@ -74,18 +74,28 @@ async function initializeBot() {
         
         // Initialize cache manager (works with or without Redis)
         const redis = connectionManager.getRedis();
-        if (redis) {
-            cacheManager = new RedisCacheManager(redis, connectionManager);
-            console.log('✅ Redis cache manager initialized');
+        cacheManager = new RedisCacheManager(redis, connectionManager);
+        await cacheManager.initialize();
+        
+        if (connections.redis) {
+            console.log('✅ Redis cache manager initialized with connection');
+            
+            // Test cache functionality
+            console.log('🧪 Testing cache functionality...');
+            const testResult = await cacheManager.testCache();
+            if (testResult.success) {
+                console.log('✅ Cache test passed - Redis is working correctly');
+            } else {
+                console.warn('⚠️ Cache test failed:', testResult.error || 'Unknown error');
+            }
         } else {
-            cacheManager = new RedisCacheManager(null, connectionManager); // Fallback mode
             console.log('⚠️ Cache manager initialized in fallback mode');
         }
         
         // Initialize XP manager with cache support
-        xpManager = new XPManager(client, db);
+        xpManager = new XPManager(client, db, cacheManager);
         await xpManager.initialize();
-        console.log('✅ XP Manager initialized');
+        console.log('✅ XP Manager initialized with cache integration');
         
         // Load commands
         client.commands = new Collection();
@@ -100,6 +110,11 @@ async function initializeBot() {
         
         // Display connection health
         displayHealthStatus();
+        
+        // Display cache statistics
+        setTimeout(async () => {
+            await displayCacheStats();
+        }, 5000); // Wait 5 seconds for initial operations
         
     } catch (error) {
         console.error('❌ Bot initialization failed:', error);
@@ -129,11 +144,44 @@ function displayHealthStatus() {
     console.log('');
 }
 
+// Display cache statistics
+async function displayCacheStats() {
+    try {
+        console.log('📊 CACHE STATISTICS:');
+        console.log('┌─────────────────────────────────────────┐');
+        console.log('│             CACHE STATUS                │');
+        console.log('├─────────────────────────────────────────┤');
+        
+        if (cacheManager) {
+            const stats = await cacheManager.getCacheStats();
+            console.log(`│ Mode:       ${stats.mode.padEnd(25)} │`);
+            console.log(`│ Redis:      ${(stats.redis ? 'Available' : 'Unavailable').padEnd(25)} │`);
+            console.log(`│ Entries:    ${String(stats.total || stats.entries || 0).padEnd(25)} │`);
+            
+            if (stats.redis) {
+                console.log(`│ Avatars:    ${String(stats.avatars || 0).padEnd(25)} │`);
+                console.log(`│ Posters:    ${String(stats.posters || 0).padEnd(25)} │`);
+                console.log(`│ Cooldowns:  ${String(stats.cooldowns || 0).padEnd(25)} │`);
+                if (stats.memoryUsed) {
+                    console.log(`│ Memory:     ${String(stats.memoryUsed).padEnd(25)} │`);
+                }
+            }
+        } else {
+            console.log('│ Cache:      Not Available               │');
+        }
+        
+        console.log('└─────────────────────────────────────────┘');
+        console.log('');
+    } catch (error) {
+        console.error('Error displaying cache stats:', error);
+    }
+}
+
 // Bot ready event - FIXED DEPRECATION WARNING
 client.once('clientReady', async () => {
     console.log('🏴‍☠️ ═══════════════════════════════════════');
     console.log('🏴‍☠️           ONE PIECE XP BOT');
-    console.log('🏴‍☠️ ═══════════════════════════────────────');
+    console.log('🏴‍☠️ ═══════════════════════════════════────');
     console.log(`⚓ Logged in as ${client.user.tag}`);
     console.log(`🏴‍☠️ Serving ${client.guilds.cache.size} server(s)`);
     console.log(`🎯 Commands loaded: ${client.commands.size}`);
@@ -146,6 +194,11 @@ client.once('clientReady', async () => {
     console.log('🏴‍☠️ ═══════════════════════════════════════');
     console.log('🎯 All systems operational!');
     console.log('🏴‍☠️ ═══════════════════════════════════════');
+    
+    // Update cache stats display after bot is fully ready
+    setTimeout(async () => {
+        await displayCacheStats();
+    }, 10000); // Wait 10 seconds for systems to settle
 });
 
 // Message event
@@ -188,6 +241,42 @@ client.on('messageCreate', async (message) => {
         };
         
         await message.reply({ embeds: [embed] });
+    }
+    
+    // Admin cache test command
+    if (message.content === '!cachetest' && message.author.id === process.env.ADMIN_USER_ID) {
+        try {
+            const testResult = await xpManager.testCache();
+            const stats = await xpManager.getCacheStats();
+            
+            const embed = {
+                color: testResult.success ? 0x00FF00 : 0xFF0000,
+                title: '🧪 **Cache Test Results**',
+                description: testResult.success ? 
+                    '```diff\n+ Cache test passed successfully\n```' : 
+                    '```diff\n- Cache test failed\n```',
+                fields: [
+                    {
+                        name: '📊 **Cache Stats**',
+                        value: `**Mode:** ${stats.mode}\n**Redis:** ${stats.redis ? 'Connected' : 'Disconnected'}\n**Entries:** ${stats.total || stats.entries || 0}`,
+                        inline: true
+                    },
+                    {
+                        name: '🧪 **Test Result**',
+                        value: testResult.success ? 
+                            `✅ ${testResult.message || 'Test passed'}` : 
+                            `❌ ${testResult.error || 'Test failed'}`,
+                        inline: true
+                    }
+                ],
+                footer: { text: '⚓ Marine Intelligence Division • Cache Test' },
+                timestamp: new Date().toISOString()
+            };
+            
+            await message.reply({ embeds: [embed] });
+        } catch (error) {
+            await message.reply(`❌ Cache test error: ${error.message}`);
+        }
     }
     
     // Admin health check command
@@ -422,6 +511,22 @@ setInterval(async () => {
         console.error('❌ Health check error:', error);
     }
 }, 300000); // 5 minutes
+
+// Periodic cache stats (every 30 minutes)
+setInterval(async () => {
+    try {
+        if (cacheManager) {
+            const stats = await cacheManager.getCacheStats();
+            console.log(`📊 [CACHE STATS] Mode: ${stats.mode}, Entries: ${stats.total || stats.entries || 0}`);
+            
+            if (stats.redis && stats.total > 0) {
+                console.log(`📊 [CACHE BREAKDOWN] Avatars: ${stats.avatars || 0}, Posters: ${stats.posters || 0}, Cooldowns: ${stats.cooldowns || 0}`);
+            }
+        }
+    } catch (error) {
+        console.error('❌ Cache stats error:', error);
+    }
+}, 1800000); // 30 minutes
 
 // Start the bot
 async function startBot() {
