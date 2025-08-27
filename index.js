@@ -83,7 +83,7 @@ async function initializeBot() {
         }
         
         // Initialize XP manager with cache support
-        xpManager = new XPManager(client, db, cacheManager);
+        xpManager = new XPManager(client, db);
         await xpManager.initialize();
         console.log('✅ XP Manager initialized');
         
@@ -129,8 +129,8 @@ function displayHealthStatus() {
     console.log('');
 }
 
-// Bot ready event
-client.once('ready', async () => {
+// Bot ready event - FIXED DEPRECATION WARNING
+client.once('clientReady', async () => {
     console.log('🏴‍☠️ ═══════════════════════════════════════');
     console.log('🏴‍☠️           ONE PIECE XP BOT');
     console.log('🏴‍☠️ ═══════════════════════════────────────');
