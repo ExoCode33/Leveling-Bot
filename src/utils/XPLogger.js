@@ -2,18 +2,18 @@ const { EmbedBuilder } = require('discord.js');
 
 /**
  * XPLogger - Enhanced XP activity logging with batching and daily cap progression
- * NEW FEATURES: Batched voice logs per channel + Daily cap progress for all sources
+ * UPDATED: Batched voice logs per channel + Daily cap progress for ALL sources
  */
 class XPLogger {
     constructor(client) {
         this.client = client;
         this.voiceLogBatch = new Map(); // Store voice activities for batching
         this.batchTimer = null;
-        this.batchInterval = 30000; // 30 seconds
+        this.batchInterval = 60000; // 60 seconds (1 minute) for better batching
     }
 
     /**
-     * Log XP activity with batching for voice and daily cap progression
+     * Log XP activity with batching for voice and daily cap progression for ALL
      */
     async logXPActivity(type, user, guildId, xpGain, additionalInfo = {}) {
         try {
@@ -44,7 +44,7 @@ class XPLogger {
     }
 
     /**
-     * Handle voice activity batching by channel
+     * Handle voice activity batching by channel - ENHANCED
      */
     async handleVoiceActivityBatching(user, guildId, xpGain, additionalInfo, channel) {
         const channelKey = `${guildId}-${additionalInfo.channelId || 'unknown'}`;
@@ -57,7 +57,8 @@ class XPLogger {
                 channelName: additionalInfo.channelName || 'Unknown Channel',
                 activities: [],
                 totalXP: 0,
-                startTime: new Date()
+                startTime: new Date(),
+                uniqueUsers: new Set()
             });
         }
 
@@ -69,10 +70,12 @@ class XPLogger {
             xpGain: xpGain,
             totalXP: additionalInfo.totalXP,
             currentLevel: additionalInfo.currentLevel,
-            member: additionalInfo.member
+            member: additionalInfo.member,
+            timestamp: new Date()
         });
         
         batch.totalXP += xpGain;
+        batch.uniqueUsers.add(user.id);
 
         // Start batch timer if not already running
         if (!this.batchTimer) {
@@ -83,7 +86,7 @@ class XPLogger {
     }
 
     /**
-     * Process and send batched voice logs
+     * Process and send batched voice logs - ENHANCED WITH DAILY PROGRESS
      */
     async processBatchedVoiceLogs(channel) {
         try {
@@ -106,7 +109,7 @@ class XPLogger {
     }
 
     /**
-     * Create batched voice activity embed
+     * Create batched voice activity embed - ENHANCED WITH DAILY PROGRESS
      */
     async createBatchedVoiceEmbed(batch) {
         const guild = this.client.guilds.cache.get(batch.guildId);
@@ -118,11 +121,11 @@ class XPLogger {
                 name: '🔴 MARINE INTELLIGENCE BUREAU'
             })
             .setTitle(`🎤 VOICE CHANNEL ACTIVITY REPORT`)
-            .setDescription(`\`\`\`diff\n- SURVEILLANCE REPORT\n- LOCATION: ${batch.channelName}\n- GUILD: ${guild?.name || 'Unknown'}\n- DURATION: ${duration}s\n- TOTAL PARTICIPANTS: ${batch.activities.length}\n- COMBINED XP AWARDED: +${batch.totalXP.toLocaleString()}\n\`\`\``)
+            .setDescription(`\`\`\`diff\n- SURVEILLANCE REPORT\n- LOCATION: ${batch.channelName}\n- GUILD: ${guild?.name || 'Unknown'}\n- DURATION: ${duration}s\n- PARTICIPANTS: ${batch.uniqueUsers.size}\n- TOTAL SESSIONS: ${batch.activities.length}\n- COMBINED XP: +${batch.totalXP.toLocaleString()}\n\`\`\``)
             .setTimestamp()
             .setFooter({ text: '⚓ Marine Intelligence Division • Voice Activity Monitor' });
 
-        // Group activities by user to avoid spam
+        // Group activities by user to avoid spam and show daily progress
         const userActivities = new Map();
         
         for (const activity of batch.activities) {
@@ -134,7 +137,8 @@ class XPLogger {
                     sessions: 0,
                     finalLevel: activity.currentLevel,
                     finalTotalXP: activity.totalXP,
-                    member: activity.member
+                    member: activity.member,
+                    latestTimestamp: activity.timestamp
                 });
             }
             
@@ -143,6 +147,11 @@ class XPLogger {
             userActivity.sessions += 1;
             userActivity.finalLevel = activity.currentLevel; // Keep latest level
             userActivity.finalTotalXP = activity.totalXP; // Keep latest total
+            
+            // Keep the most recent timestamp
+            if (activity.timestamp > userActivity.latestTimestamp) {
+                userActivity.latestTimestamp = activity.timestamp;
+            }
         }
 
         // Add participant details with daily cap progress
@@ -158,18 +167,32 @@ class XPLogger {
                 if (userActivity.member && this.client.xpManager?.dailyCapManager) {
                     const dailyStats = await this.client.xpManager.dailyCapManager.getDailyStats(userId, batch.guildId, userActivity.member);
                     const percentage = Math.min(100, dailyStats.percentage);
-                    const progressBar = this.createProgressBar(dailyStats.totalXP, dailyStats.dailyCap, 10);
-                    dailyProgress = `\n    Daily: ${dailyStats.totalXP.toLocaleString()}/${dailyStats.dailyCap.toLocaleString()} (${percentage}%) ${progressBar}`;
+                    const progressBar = this.createProgressBar(dailyStats.totalXP, dailyStats.dailyCap, 12);
+                    
+                    // Determine status indicator
+                    let statusIcon = '🟢'; // Green - good
+                    if (percentage >= 90) statusIcon = '🔴'; // Red - at/near cap
+                    else if (percentage >= 70) statusIcon = '🟡'; // Yellow - approaching cap
+                    
+                    dailyProgress = `\n    ${statusIcon} Daily: ${dailyStats.totalXP.toLocaleString()}/${dailyStats.dailyCap.toLocaleString()} (${percentage}%) ${progressBar}`;
+                    
+                    // Add tier info if applicable
+                    if (dailyStats.tierLevel > 0) {
+                        dailyProgress += `\n    ⭐ ${dailyStats.tierName} • Remaining: ${dailyStats.remaining.toLocaleString()} XP`;
+                    } else {
+                        dailyProgress += `\n    📊 Remaining: ${dailyStats.remaining.toLocaleString()} XP`;
+                    }
                 }
             } catch (error) {
                 // Silently handle errors
+                dailyProgress = '\n    ❓ Daily progress unavailable';
             }
 
-            participantDetails += `**${userActivity.user.username}** (+${userActivity.totalXP} XP)\n`;
-            participantDetails += `    Level: ${userActivity.finalLevel} | Total: ${userActivity.finalTotalXP.toLocaleString()}${dailyProgress}\n\n`;
+            participantDetails += `**${userActivity.user.username}** (+${userActivity.totalXP} XP in ${userActivity.sessions} sessions)\n`;
+            participantDetails += `    📈 Level: ${userActivity.finalLevel} | Total: ${userActivity.finalTotalXP.toLocaleString()}${dailyProgress}\n\n`;
 
             // Limit to prevent embed size issues
-            if (participantCount >= 8) {
+            if (participantCount >= 6) {
                 const remaining = userActivities.size - participantCount;
                 if (remaining > 0) {
                     participantDetails += `*...and ${remaining} more participants*`;
@@ -180,17 +203,27 @@ class XPLogger {
 
         if (participantDetails) {
             embed.addFields({
-                name: '👥 PARTICIPANT ACTIVITY',
+                name: '👥 PARTICIPANT ACTIVITY & DAILY PROGRESS',
                 value: participantDetails.trim(),
                 inline: false
             });
         }
 
+        // Add summary statistics
+        const avgXPPerUser = Math.round(batch.totalXP / batch.uniqueUsers.size);
+        const avgSessionsPerUser = Math.round(batch.activities.length / batch.uniqueUsers.size);
+        
+        embed.addFields({
+            name: '📊 BATCH STATISTICS',
+            value: `**Average XP per User:** ${avgXPPerUser}\n**Average Sessions per User:** ${avgSessionsPerUser}\n**XP Rate:** ${Math.round(batch.totalXP / (duration / 60))} XP/min`,
+            inline: false
+        });
+
         return embed;
     }
 
     /**
-     * Create enhanced log embed with daily cap progression
+     * Create enhanced log embed with daily cap progression - ENHANCED FOR ALL TYPES
      */
     async createEnhancedLogEmbed(type, user, guildId, xpGain, additionalInfo) {
         const embed = new EmbedBuilder()
@@ -207,7 +240,7 @@ class XPLogger {
         // Base information
         let description = `\`\`\`diff\n- SUBJECT: ${user.username} (${user.id})\n- GUILD: ${guild?.name || 'Unknown'}\n- XP AWARDED: +${xpGain}\n- NEW TOTAL: ${this.formatNumber(additionalInfo.totalXP)}\n- CURRENT LEVEL: ${additionalInfo.currentLevel || 0}\n- SOURCE: ${type.toUpperCase()}\n\`\`\``;
 
-        // Add daily cap progression
+        // Add daily cap progression for ALL types
         try {
             if (additionalInfo.member && this.client.xpManager?.dailyCapManager) {
                 const dailyStats = await this.client.xpManager.dailyCapManager.getDailyStats(user.id, guildId, additionalInfo.member);
@@ -215,31 +248,46 @@ class XPLogger {
                 const progressBar = this.createProgressBar(dailyStats.totalXP, dailyStats.dailyCap, 20);
                 const percentage = Math.min(100, dailyStats.percentage);
                 
-                // Determine tier info
+                // Determine tier info and status
                 let tierInfo = 'Standard';
+                let statusIcon = '🟢';
                 if (dailyStats.tierLevel > 0) {
                     tierInfo = `Tier ${dailyStats.tierLevel}`;
                 }
+                
+                if (percentage >= 95) statusIcon = '🔴'; // Red - at/near cap
+                else if (percentage >= 80) statusIcon = '🟡'; // Yellow - approaching cap
 
                 embed.addFields({
-                    name: '📊 DAILY PROGRESS',
+                    name: `📊 DAILY PROGRESS ${statusIcon}`,
                     value: `**Cap:** ${dailyStats.dailyCap.toLocaleString()} XP (${tierInfo})\n**Used:** ${dailyStats.totalXP.toLocaleString()} XP (${percentage}%)\n**Remaining:** ${dailyStats.remaining.toLocaleString()} XP\n\n${progressBar}`,
                     inline: false
                 });
 
-                // Add breakdown if available
+                // Add source breakdown if available
                 if (dailyStats.messageXP > 0 || dailyStats.voiceXP > 0 || dailyStats.reactionXP > 0) {
+                    let sourceBreakdown = '';
+                    if (dailyStats.messageXP > 0) sourceBreakdown += `💬 Messages: ${dailyStats.messageXP.toLocaleString()} XP\n`;
+                    if (dailyStats.voiceXP > 0) sourceBreakdown += `🎤 Voice: ${dailyStats.voiceXP.toLocaleString()} XP\n`;
+                    if (dailyStats.reactionXP > 0) sourceBreakdown += `👍 Reactions: ${dailyStats.reactionXP.toLocaleString()} XP`;
+                    
                     embed.addFields({
                         name: '📈 TODAY\'S SOURCES',
-                        value: `💬 Messages: ${dailyStats.messageXP.toLocaleString()} XP\n🎤 Voice: ${dailyStats.voiceXP.toLocaleString()} XP\n👍 Reactions: ${dailyStats.reactionXP.toLocaleString()} XP`,
+                        value: sourceBreakdown.trim(),
                         inline: true
                     });
                 }
 
-                // Add warning if near cap
-                if (percentage >= 90) {
+                // Add warning if near cap or level up occurred
+                if (additionalInfo.oldLevel && additionalInfo.currentLevel > additionalInfo.oldLevel) {
                     embed.addFields({
-                        name: '⚠️ WARNING',
+                        name: '⚡ LEVEL UP DETECTED',
+                        value: `\`\`\`diff\n+ LEVEL INCREASED: ${additionalInfo.oldLevel} → ${additionalInfo.currentLevel}\n+ Check announcements for bounty update\n\`\`\``,
+                        inline: false
+                    });
+                } else if (percentage >= 95) {
+                    embed.addFields({
+                        name: '⚠️ CAP WARNING',
                         value: dailyStats.isAtCap ? 
                             '```diff\n- DAILY CAP REACHED\n- No more XP until reset\n```' : 
                             '```diff\n! APPROACHING DAILY CAP\n! Limited XP remaining\n```',
@@ -251,7 +299,7 @@ class XPLogger {
             console.error('[XP LOG] Error adding daily progress:', error);
         }
 
-        // Set title based on type
+        // Set title and description based on type
         switch (type) {
             case 'message':
                 embed.setTitle('💬 MESSAGE ACTIVITY DETECTED');
@@ -311,7 +359,7 @@ class XPLogger {
     }
 
     /**
-     * Create progress bar for display
+     * Create progress bar for display - ENHANCED
      */
     createProgressBar(current, max, length = 20) {
         if (max === 0) return '░'.repeat(length);
@@ -320,10 +368,15 @@ class XPLogger {
         const filled = Math.round(percentage * length);
         const empty = length - filled;
         
-        const filledChar = '█';
-        const emptyChar = '░';
+        // Use different characters based on percentage for visual appeal
+        let filledChar = '█';
+        let emptyChar = '░';
         
-        return filledChar.repeat(filled) + emptyChar.repeat(empty);
+        if (percentage >= 0.95) filledChar = '🔴'; // Red when very close to cap
+        else if (percentage >= 0.8) filledChar = '🟡'; // Yellow when approaching cap
+        else filledChar = '🟢'; // Green when safe
+        
+        return filledChar.repeat(Math.max(1, filled)) + emptyChar.repeat(empty);
     }
 
     /**
