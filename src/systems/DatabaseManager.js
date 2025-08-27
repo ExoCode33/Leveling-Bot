@@ -1,6 +1,6 @@
 /**
  * DatabaseManager - Handles all database operations and schema management
- * FIXED VERSION with PostgreSQL compatibility for ROUND function
+ * UPDATED VERSION with XP Boost Roles support
  */
 class DatabaseManager {
     constructor(db) {
@@ -71,7 +71,7 @@ class DatabaseManager {
                 )
             `);
 
-            // Guild settings table - SIMPLIFIED with only essential settings
+            // Guild settings table - ENHANCED with XP boost roles
             await this.db.query(`
                 CREATE TABLE IF NOT EXISTS ${this.tables.guildSettings} (
                     guild_id VARCHAR(20) PRIMARY KEY,
@@ -79,10 +79,23 @@ class DatabaseManager {
                     levelup_enabled BOOLEAN DEFAULT false,
                     xp_log_channel VARCHAR(20) DEFAULT NULL,
                     xp_log_enabled BOOLEAN DEFAULT false,
+                    xp_boost_roles TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             `);
+
+            // Check if xp_boost_roles column exists, if not add it
+            try {
+                await this.db.query(`
+                    ALTER TABLE ${this.tables.guildSettings} 
+                    ADD COLUMN IF NOT EXISTS xp_boost_roles TEXT DEFAULT NULL
+                `);
+                console.log('✅ Added xp_boost_roles column to guild_settings');
+            } catch (error) {
+                // Column might already exist, which is fine
+                console.log('🔄 xp_boost_roles column already exists or could not be added');
+            }
 
             // Create indexes for better performance
             await this.db.query(`CREATE INDEX IF NOT EXISTS "idx_Leveling-Bot_user_levels_total_xp" ON ${this.tables.userLevels}(guild_id, total_xp DESC)`);
@@ -420,7 +433,7 @@ class DatabaseManager {
     }
 
     /**
-     * Guild settings management - SIMPLIFIED
+     * Guild settings management - ENHANCED WITH XP BOOST ROLES
      */
     async getGuildSettings(guildId) {
         try {
@@ -444,8 +457,8 @@ class DatabaseManager {
     async createDefaultGuildSettings(guildId) {
         try {
             const result = await this.db.query(`
-                INSERT INTO ${this.tables.guildSettings} (guild_id, levelup_enabled, xp_log_enabled)
-                VALUES ($1, false, false)
+                INSERT INTO ${this.tables.guildSettings} (guild_id, levelup_enabled, xp_log_enabled, xp_boost_roles)
+                VALUES ($1, false, false, NULL)
                 RETURNING *
             `, [guildId]);
             
@@ -462,10 +475,11 @@ class DatabaseManager {
             // Ensure guild settings exist first
             await this.getGuildSettings(guildId);
             
-            // Build dynamic query based on setting name - ONLY ALLOW VALID SETTINGS
+            // Build dynamic query based on setting name - ENHANCED WITH XP BOOST ROLES
             const validSettings = [
                 'levelup_channel', 'levelup_enabled', 
-                'xp_log_channel', 'xp_log_enabled'
+                'xp_log_channel', 'xp_log_enabled',
+                'xp_boost_roles'
             ];
             
             if (!validSettings.includes(settingName)) {
@@ -497,6 +511,53 @@ class DatabaseManager {
         } catch (error) {
             console.error('[Leveling-Bot] Error getting all guild settings:', error);
             return [];
+        }
+    }
+
+    /**
+     * Get XP boost roles for a guild
+     */
+    async getXPBoostRoles(guildId) {
+        try {
+            const guildSettings = await this.getGuildSettings(guildId);
+            const boostRolesJson = guildSettings?.xp_boost_roles;
+            
+            if (!boostRolesJson) return [];
+            
+            const boostRoles = JSON.parse(boostRolesJson);
+            return Array.isArray(boostRoles) ? boostRoles : [];
+        } catch (error) {
+            console.error('Error getting XP boost roles:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Calculate total XP multiplier for a member based on their boost roles
+     */
+    async calculateXPMultiplier(member, guildId) {
+        try {
+            if (!member) return 1.0;
+
+            const boostRoles = await this.getXPBoostRoles(guildId);
+            if (boostRoles.length === 0) return 1.0;
+
+            let totalMultiplier = 1.0;
+
+            // Check each boost role and add multipliers additively
+            for (const boostRole of boostRoles) {
+                if (member.roles.cache.has(boostRole.role_id)) {
+                    // Additive multipliers: if role has 1.5x, add 0.5 to the total
+                    totalMultiplier += (boostRole.multiplier - 1);
+                    console.log(`[XP BOOST] ${member.displayName} has boost role with ${boostRole.multiplier}x multiplier`);
+                }
+            }
+
+            console.log(`[XP BOOST] ${member.displayName} total XP multiplier: ${totalMultiplier.toFixed(2)}x`);
+            return totalMultiplier;
+        } catch (error) {
+            console.error('Error calculating XP multiplier:', error);
+            return 1.0;
         }
     }
 
@@ -789,7 +850,8 @@ class DatabaseManager {
                 SELECT 
                     COUNT(*) as total_guilds,
                     COUNT(CASE WHEN levelup_enabled = true THEN 1 END) as guilds_with_levelup,
-                    COUNT(CASE WHEN xp_log_enabled = true THEN 1 END) as guilds_with_logging
+                    COUNT(CASE WHEN xp_log_enabled = true THEN 1 END) as guilds_with_logging,
+                    COUNT(CASE WHEN xp_boost_roles IS NOT NULL THEN 1 END) as guilds_with_boost_roles
                 FROM ${this.tables.guildSettings}
             `);
             stats.guildSettings = guildResult.rows[0];
