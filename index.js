@@ -547,3 +547,199 @@ module.exports = {
 
 // Start the bot
 startBot().catch(console.error);
+                    tierRoleChanged = true;
+                    if (hasRole) {
+                        console.log(`[ROLE CHANGE] ${newMember.user.username} gained Tier ${tier} role`);
+                    } else {
+                        console.log(`[ROLE CHANGE] ${newMember.user.username} lost Tier ${tier} role`);
+                    }
+                }
+            }
+            
+            // If tier roles changed, handle daily cap adjustment and cache invalidation
+            if (tierRoleChanged && xpManager && xpManager.dailyCapManager) {
+                await xpManager.dailyCapManager.handleRoleChange(newMember, oldRoles, newRoles);
+                
+                // Invalidate cache for this user's daily progress
+                if (cacheManager) {
+                    const currentDate = cacheManager.getCurrentDateKey();
+                    await cacheManager.invalidateUserDailyProgress(
+                        newMember.user.id, 
+                        newMember.guild.id, 
+                        currentDate
+                    );
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error handling guild member update:', error);
+    }
+});
+
+// Slash command handler
+client.on('interactionCreate', async (interaction) => {
+    if (interaction.isChatInputCommand()) {
+        const command = client.commands.get(interaction.commandName);
+        if (!command) return;
+
+        try {
+            await command.execute(interaction, { 
+                xpManager, 
+                databaseManager, 
+                cacheManager,
+                connectionManager 
+            });
+        } catch (error) {
+            console.error(`Error executing command ${interaction.commandName}:`, error);
+            
+            const errorMessage = '❌ There was an error executing this command!';
+            
+            if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({ content: errorMessage, ephemeral: true });
+            } else {
+                await interaction.reply({ content: errorMessage, ephemeral: true });
+            }
+        }
+    } else if (interaction.isButton()) {
+        // Handle button interactions for leaderboard navigation
+        if (interaction.customId.startsWith('leaderboard_')) {
+            const type = interaction.customId.replace('leaderboard_', '');
+            const leaderboardCommand = client.commands.get('leaderboard');
+            
+            if (leaderboardCommand) {
+                // Create a mock interaction with the type option
+                const mockInteraction = {
+                    ...interaction,
+                    options: {
+                        getString: (name) => name === 'type' ? type : null
+                    }
+                };
+                
+                try {
+                    await leaderboardCommand.execute(mockInteraction, { 
+                        xpManager, 
+                        databaseManager, 
+                        cacheManager,
+                        connectionManager 
+                    });
+                } catch (error) {
+                    console.error('Error handling leaderboard button:', error);
+                    await interaction.reply({ 
+                        content: '❌ There was an error processing your request!', 
+                        ephemeral: true 
+                    });
+                }
+            }
+        }
+    }
+});
+
+// Error handling
+client.on('error', error => {
+    console.error('❌ Discord client error:', error);
+});
+
+client.on('warn', warning => {
+    console.warn('⚠️ Discord client warning:', warning);
+});
+
+process.on('unhandledRejection', error => {
+    console.error('❌ Unhandled promise rejection:', error);
+    
+    // If it's a connection error, try to reconnect
+    if (error.message && error.message.includes('Redis')) {
+        console.log('🔄 Attempting Redis reconnection...');
+        connectionManager?.reconnectRedis();
+    }
+});
+
+process.on('uncaughtException', error => {
+    console.error('❌ Uncaught exception:', error);
+    process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
+
+async function gracefulShutdown() {
+    console.log('🛑 Shutting down bot gracefully...');
+    
+    try {
+        if (xpManager) {
+            await xpManager.cleanup();
+        }
+        
+        if (cacheManager) {
+            await cacheManager.cleanup();
+        }
+        
+        if (connectionManager) {
+            await connectionManager.shutdown();
+        }
+        
+        client.destroy();
+        console.log('👋 Bot shutdown complete!');
+    } catch (error) {
+        console.error('❌ Error during shutdown:', error);
+    }
+    
+    process.exit(0);
+}
+
+// Periodic health checks (every 5 minutes)
+setInterval(async () => {
+    try {
+        if (connectionManager) {
+            const health = connectionManager.getHealthStatus();
+            
+            // Log status if there are issues
+            if (!health.postgresql.connected) {
+                console.error('❌ PostgreSQL connection lost!');
+            }
+            
+            if (!health.redis.connected && connectionManager.isRedisAvailable()) {
+                console.warn('⚠️ Redis connection lost, attempting reconnection...');
+                await connectionManager.reconnectRedis();
+            }
+        }
+    } catch (error) {
+        console.error('❌ Health check error:', error);
+    }
+}, 300000); // 5 minutes
+
+// Periodic cache stats (every 30 minutes)
+setInterval(async () => {
+    try {
+        if (cacheManager) {
+            const stats = await cacheManager.getCacheStats();
+            console.log(`📊 [CACHE STATS] Mode: ${stats.mode}, Entries: ${stats.total || stats.entries || 0}`);
+            
+            if (stats.redis && stats.total > 0) {
+                console.log(`📊 [CACHE BREAKDOWN] Avatars: ${stats.avatars || 0}, Posters: ${stats.posters || 0}, Cooldowns: ${stats.cooldowns || 0}`);
+            }
+        }
+    } catch (error) {
+        console.error('❌ Cache stats error:', error);
+    }
+}, 1800000); // 30 minutes
+
+// Start the bot
+async function startBot() {
+    console.log('🚀 Starting One Piece XP Bot...');
+    
+    await initializeBot();
+    await client.login(process.env.DISCORD_TOKEN);
+}
+
+// Export for other modules
+module.exports = { 
+    client, 
+    databaseManager, 
+    xpManager, 
+    cacheManager, 
+    connectionManager 
+};
+
+// Start the bot
+startBot().catch(console.error);
