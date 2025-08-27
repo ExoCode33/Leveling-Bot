@@ -19,6 +19,7 @@ try {
 /**
  * ConnectionManager - Handles PostgreSQL and Redis connections with graceful fallbacks
  * PRIORITY: Redis first, but bot works 100% even if Redis fails
+ * SUPPORTS: Railway environment variables and REDIS_URL format
  */
 class ConnectionManager {
     constructor() {
@@ -104,6 +105,7 @@ class ConnectionManager {
 
     /**
      * Initialize Redis (PRIORITIZED but OPTIONAL with fallback)
+     * Supports both Railway REDIS_URL and individual variables
      */
     async initializeRedis() {
         // Check if Redis module is available
@@ -119,27 +121,50 @@ class ConnectionManager {
         try {
             console.log('🔴 Connecting to Redis (priority mode)...');
             
-            const redisConfig = {
-                host: process.env.REDIS_HOST || 'localhost',
-                port: parseInt(process.env.REDIS_PORT) || 6379,
-                password: process.env.REDIS_PASSWORD || undefined,
-                db: parseInt(process.env.REDIS_DB) || 0,
-                keyPrefix: 'Leveling-Bot:',
-                retryDelayOnFailover: 1000,
-                maxRetriesPerRequest: 3,
-                lazyConnect: true,
-                connectTimeout: 10000,
-                commandTimeout: 5000,
-                enableOfflineQueue: false, // Don't queue commands when disconnected
-                family: 4, // Force IPv4
-            };
+            let redisConfig;
+            
+            // Check if REDIS_URL is provided (Railway format)
+            if (process.env.REDIS_URL) {
+                console.log('🔗 Using REDIS_URL connection string (Railway format)');
+                redisConfig = {
+                    connectString: process.env.REDIS_URL,
+                    keyPrefix: 'Leveling-Bot:',
+                    retryDelayOnFailover: 5000,
+                    maxRetriesPerRequest: 2,
+                    lazyConnect: true,
+                    connectTimeout: 10000,
+                    commandTimeout: 5000,
+                    enableOfflineQueue: false,
+                    family: 4,
+                    retryDelayOnClusterDown: 10000,
+                    retryDelayOnReconnect: 10000
+                };
+            } else {
+                // Use individual Redis variables
+                redisConfig = {
+                    host: process.env.REDIS_HOST || 'localhost',
+                    port: parseInt(process.env.REDIS_PORT) || 6379,
+                    password: process.env.REDIS_PASSWORD || undefined,
+                    db: parseInt(process.env.REDIS_DB) || 0,
+                    keyPrefix: 'Leveling-Bot:',
+                    retryDelayOnFailover: 5000, // Slower retry: 5 seconds
+                    maxRetriesPerRequest: 2, // Fewer retries
+                    lazyConnect: true,
+                    connectTimeout: 10000,
+                    commandTimeout: 5000,
+                    enableOfflineQueue: false,
+                    family: 4,
+                    retryDelayOnClusterDown: 10000, // 10 second delay on cluster down
+                    retryDelayOnReconnect: 10000, // 10 second delay on reconnect
+                };
 
-            // Remove undefined password to avoid connection issues
-            if (!redisConfig.password) {
-                delete redisConfig.password;
+                // Remove undefined password to avoid connection issues
+                if (!redisConfig.password) {
+                    delete redisConfig.password;
+                }
             }
 
-            console.log(`🔴 Redis config: ${redisConfig.host}:${redisConfig.port} (DB: ${redisConfig.db})`);
+            console.log(`🔴 Redis config: ${process.env.REDIS_URL ? 'URL connection' : `${redisConfig.host}:${redisConfig.port} (DB: ${redisConfig.db || 0})`}`);
 
             this.redis = new Redis(redisConfig);
             
@@ -448,7 +473,8 @@ class ConnectionManager {
                 status: this.redisConnected ? '✅ Optimized' : '⚠️ Fallback Mode',
                 required: false,
                 fallbackActive: !this.redisConnected,
-                priority: true
+                priority: true,
+                connectionType: process.env.REDIS_URL ? 'Railway URL' : 'Individual Variables'
             },
             cache: {
                 type: this.redisConnected ? 'Redis (Optimized)' : 'In-Memory Fallback',
@@ -493,14 +519,19 @@ class ConnectionManager {
                     const info = await this.redis.info('server');
                     results.redisDetails = {
                         version: info.match(/redis_version:([^\r\n]+)/)?.[1] || 'Unknown',
-                        mode: info.match(/redis_mode:([^\r\n]+)/)?.[1] || 'standalone'
+                        mode: info.match(/redis_mode:([^\r\n]+)/)?.[1] || 'standalone',
+                        connectionType: process.env.REDIS_URL ? 'Railway URL' : 'Individual Variables'
                     };
                 }
                 
                 console.log('✅ Redis connection test passed');
             } else {
                 console.log('⚠️ Redis connection test skipped (using fallback mode)');
-                results.redisDetails = { mode: 'fallback', reason: 'Not connected' };
+                results.redisDetails = { 
+                    mode: 'fallback', 
+                    reason: 'Not connected',
+                    connectionType: process.env.REDIS_URL ? 'Railway URL (failed)' : 'Individual Variables (failed)'
+                };
             }
         } catch (error) {
             console.error('❌ Redis connection test failed:', error.message);
@@ -553,7 +584,8 @@ class ConnectionManager {
             redis: {
                 available: this.isRedisAvailable(),
                 connected: this.redisConnected,
-                priority: true
+                priority: true,
+                connectionType: process.env.REDIS_URL ? 'Railway URL' : 'Individual Variables'
             },
             memory: {
                 entries: this.memoryCache.size,
