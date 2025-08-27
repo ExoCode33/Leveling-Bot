@@ -3,6 +3,11 @@ const CanvasGenerator = require('../utils/CanvasGenerator');
 const BountyCalculator = require('../utils/BountyCalculator');
 const LevelCalculator = require('../utils/LevelCalculator');
 
+// Admin user ID from environment
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID || '1095470472390508658';
+// Commands channel restriction
+const COMMANDS_CHANNEL = process.env.COMMANDS_CHANNEL || null;
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('level')
@@ -14,6 +19,14 @@ module.exports = {
 
     async execute(interaction, { xpManager, databaseManager }) {
         try {
+            // Check channel restriction (admin can use anywhere)
+            if (interaction.user.id !== ADMIN_USER_ID && COMMANDS_CHANNEL && interaction.channel.id !== COMMANDS_CHANNEL) {
+                return await interaction.reply({
+                    content: `❌ **Channel Restriction**\n\nThis command can only be used in <#${COMMANDS_CHANNEL}>.`,
+                    ephemeral: true
+                });
+            }
+
             const targetUser = interaction.options.getUser('user') || interaction.user;
             const member = interaction.guild.members.cache.get(targetUser.id);
             
@@ -129,6 +142,18 @@ module.exports = {
                 inline: false
             });
 
+            // Add daily progress for regular users
+            if (!isPirateKing && userStats && userStats.dailyStats) {
+                const daily = userStats.dailyStats;
+                const progressBar = this.createProgressBar(daily.totalXP, daily.dailyCap, 15);
+                
+                embed.addFields({
+                    name: '📅 DAILY PROGRESS',
+                    value: `\`\`\`diff\n- Daily Cap: ${daily.dailyCap.toLocaleString()} XP (${daily.tierName})\n- Used Today: ${daily.totalXP.toLocaleString()} XP (${daily.percentage}%)\n- Remaining: ${daily.remaining.toLocaleString()} XP\n- Progress: ${progressBar}\n\`\`\``,
+                    inline: false
+                });
+            }
+
             if (isPirateKing) {
                 embed.addFields({
                     name: '👑 SPECIAL CLASSIFICATION',
@@ -161,5 +186,21 @@ module.exports = {
                 await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
             }
         }
+    },
+
+    /**
+     * Create progress bar for display
+     */
+    createProgressBar(current, max, length = 20) {
+        if (max === 0) return '░'.repeat(length);
+        
+        const percentage = Math.max(0, Math.min(1, current / max));
+        const filled = Math.round(percentage * length);
+        const empty = length - filled;
+        
+        const filledChar = '█';
+        const emptyChar = '░';
+        
+        return filledChar.repeat(filled) + emptyChar.repeat(empty);
     }
 };
