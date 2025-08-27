@@ -2,12 +2,13 @@ const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('disc
 
 // Admin user ID from environment
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID || '1095470472390508658';
+// Commands channel restriction
+const COMMANDS_CHANNEL = process.env.COMMANDS_CHANNEL || null;
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('admin')
-        .setDescription('⚓ Marine Command Center - Complete Administration Suite')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDescription('⚓ Marine Command Center - Complete Administration Suite (Admin Only)')
         .addStringOption(option =>
             option
                 .setName('action')
@@ -52,6 +53,8 @@ module.exports = {
                     ephemeral: true
                 });
             }
+
+            // Admin can use anywhere - no channel restriction for admin
 
             const action = interaction.options.getString('action');
             const targetUser = interaction.options.getUser('user');
@@ -176,11 +179,11 @@ module.exports = {
             const newLevel = updatedStats?.level || 0;
             const newTotalXP = updatedStats?.total_xp || 0;
 
-            // Create response embed
+            // Create response embed with RED text for admin
             const embed = new EmbedBuilder()
-                .setColor('#00FF00')
+                .setColor('#FF0000') // Red color
                 .setTitle('⚓ MARINE COMMAND CENTER')
-                .setDescription('**XP AWARDED SUCCESSFULLY**')
+                .setDescription('```diff\n- XP AWARDED SUCCESSFULLY\n```') // Red text
                 .addFields(
                     {
                         name: '🎯 Target',
@@ -218,137 +221,6 @@ module.exports = {
             await interaction.editReply({ embeds: [embed] });
 
         } catch (error) {
-            console.error('Add XP error:', error);
-            await interaction.editReply({
-                content: '❌ **Operation Failed**\n\nFailed to award XP. Please try again.'
-            });
-        }
-    },
-
-    /**
-     * Handle removing XP from user
-     */
-    async handleRemoveXP(interaction, targetUser, amount, reason, xpManager, databaseManager) {
-        try {
-            await interaction.deferReply();
-
-            // Get current user stats
-            const currentStats = await xpManager.getUserStats(targetUser.id, interaction.guild.id);
-            if (!currentStats) {
-                return await interaction.editReply({
-                    content: '❌ **User Not Found**\n\nThis user has no XP data in this server.'
-                });
-            }
-
-            const oldLevel = currentStats.level;
-            const oldTotalXP = currentStats.total_xp;
-
-            // Calculate new XP (ensure it doesn't go below 0)
-            const newTotalXP = Math.max(0, oldTotalXP - amount);
-            
-            // Use database manager to directly set the XP
-            await databaseManager.updateUserXP(targetUser.id, interaction.guild.id, -(oldTotalXP - newTotalXP), 'admin');
-            
-            // Calculate and update new level
-            const LevelCalculator = require('../utils/LevelCalculator');
-            const levelCalc = new LevelCalculator();
-            const newLevel = levelCalc.calculateLevel(newTotalXP);
-            await databaseManager.updateUserLevel(targetUser.id, interaction.guild.id, newLevel);
-
-            // Create response embed
-            const embed = new EmbedBuilder()
-                .setColor('#FF6B6B')
-                .setTitle('⚓ MARINE COMMAND CENTER')
-                .setDescription('**XP REMOVED SUCCESSFULLY**')
-                .addFields(
-                    {
-                        name: '🎯 Target',
-                        value: `${targetUser.username} (${targetUser.id})`,
-                        inline: true
-                    },
-                    {
-                        name: '📉 XP Change',
-                        value: `-${amount.toLocaleString()} XP`,
-                        inline: true
-                    },
-                    {
-                        name: '📊 Results',
-                        value: `**Before:** ${oldTotalXP.toLocaleString()} XP (Level ${oldLevel})\n**After:** ${newTotalXP.toLocaleString()} XP (Level ${newLevel})`,
-                        inline: false
-                    },
-                    {
-                        name: '📝 Reason',
-                        value: reason,
-                        inline: false
-                    }
-                )
-                .setFooter({ text: `⚓ Authorized by ${interaction.user.username} • Marine Intelligence` })
-                .setTimestamp();
-
-            await interaction.editReply({ embeds: [embed] });
-
-        } catch (error) {
-            console.error('Remove XP error:', error);
-            await interaction.editReply({
-                content: '❌ **Operation Failed**\n\nFailed to remove XP. Please try again.'
-            });
-        }
-    },
-
-    /**
-     * Handle setting user XP total
-     */
-    async handleSetXP(interaction, targetUser, amount, reason, xpManager, databaseManager) {
-        try {
-            await interaction.deferReply();
-
-            // Get current stats
-            const currentStats = await xpManager.getUserStats(targetUser.id, interaction.guild.id);
-            const oldLevel = currentStats?.level || 0;
-            const oldTotalXP = currentStats?.total_xp || 0;
-
-            // Calculate new level
-            const LevelCalculator = require('../utils/LevelCalculator');
-            const levelCalc = new LevelCalculator();
-            const newLevel = levelCalc.calculateLevel(amount);
-
-            // Set XP directly in database
-            await databaseManager.updateUserXP(targetUser.id, interaction.guild.id, amount - oldTotalXP, 'admin');
-            await databaseManager.updateUserLevel(targetUser.id, interaction.guild.id, newLevel);
-
-            // Create response embed
-            const embed = new EmbedBuilder()
-                .setColor('#4A90E2')
-                .setTitle('⚓ MARINE COMMAND CENTER')
-                .setDescription('**XP SET SUCCESSFULLY**')
-                .addFields(
-                    {
-                        name: '🎯 Target',
-                        value: `${targetUser.username} (${targetUser.id})`,
-                        inline: true
-                    },
-                    {
-                        name: '🔄 XP Change',
-                        value: `Set to ${amount.toLocaleString()} XP`,
-                        inline: true
-                    },
-                    {
-                        name: '📊 Results',
-                        value: `**Before:** ${oldTotalXP.toLocaleString()} XP (Level ${oldLevel})\n**After:** ${amount.toLocaleString()} XP (Level ${newLevel})`,
-                        inline: false
-                    },
-                    {
-                        name: '📝 Reason',
-                        value: reason,
-                        inline: false
-                    }
-                )
-                .setFooter({ text: `⚓ Authorized by ${interaction.user.username} • Marine Intelligence` })
-                .setTimestamp();
-
-            await interaction.editReply({ embeds: [embed] });
-
-        } catch (error) {
             console.error('Set XP error:', error);
             await interaction.editReply({
                 content: '❌ **Operation Failed**\n\nFailed to set XP. Please try again.'
@@ -372,11 +244,11 @@ module.exports = {
             await databaseManager.updateUserXP(targetUser.id, interaction.guild.id, -oldTotalXP, 'admin');
             await databaseManager.updateUserLevel(targetUser.id, interaction.guild.id, 0);
 
-            // Create response embed
+            // Create response embed with RED text for admin
             const embed = new EmbedBuilder()
-                .setColor('#FF0000')
+                .setColor('#FF0000') // Red color
                 .setTitle('⚓ MARINE COMMAND CENTER')
-                .setDescription('**USER RESET SUCCESSFULLY**')
+                .setDescription('```diff\n- USER RESET SUCCESSFULLY\n```') // Red text
                 .addFields(
                     {
                         name: '🎯 Target',
@@ -413,7 +285,7 @@ module.exports = {
     },
 
     /**
-     * Handle viewing user stats - ENHANCED WITH DAILY CAP AND TIER INFO
+     * Handle viewing user stats - ENHANCED WITH DAILY CAP AND TIER INFO - RED TEXT FOR ADMIN
      */
     async handleUserStats(interaction, targetUser, xpManager, databaseManager) {
         try {
@@ -455,11 +327,11 @@ module.exports = {
                 }
             }
 
-            // Create detailed stats embed
+            // Create detailed stats embed with RED text for admin
             const embed = new EmbedBuilder()
-                .setColor('#4A90E2')
+                .setColor('#FF0000') // Red color for admin
                 .setTitle('⚓ MARINE INTELLIGENCE DOSSIER')
-                .setDescription(`**${targetUser.username}** • Detailed Criminal Profile`)
+                .setDescription('```diff\n- DETAILED CRIMINAL PROFILE\n- ADMINISTRATIVE ACCESS\n```') // Red text
                 .setThumbnail(targetUser.displayAvatarURL({ size: 128 }))
                 .addFields(
                     {
@@ -531,7 +403,7 @@ module.exports = {
                 }
             }
 
-            embed.setFooter({ text: `⚓ Marine Intelligence • Dossier compiled by ${interaction.user.username}` })
+            embed.setFooter({ text: `⚓ Marine Intelligence • Admin Dossier by ${interaction.user.username}` })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
@@ -556,9 +428,9 @@ module.exports = {
                 await xpManager.dailyCapManager.resetDaily();
                 
                 const resetEmbed = new EmbedBuilder()
-                    .setColor(0x00FF00)
+                    .setColor(0xFF0000) // Red color for admin
                     .setTitle('🌅 DAILY RESET COMPLETE')
-                    .setDescription('```diff\n+ Daily XP caps have been reset\n+ All users can now gain XP again\n+ Reset triggered manually by admin```')
+                    .setDescription('```diff\n- Daily XP caps have been reset\n- All users can now gain XP again\n- Reset triggered manually by admin\n```') // Red text
                     .setTimestamp()
                     .setFooter({ text: `⚓ Authorized by ${interaction.user.username} • Marine Intelligence` });
 
@@ -576,4 +448,135 @@ module.exports = {
             });
         }
     }
-};
+};: [embed] });
+
+        } catch (error) {
+            console.error('Add XP error:', error);
+            await interaction.editReply({
+                content: '❌ **Operation Failed**\n\nFailed to award XP. Please try again.'
+            });
+        }
+    },
+
+    /**
+     * Handle removing XP from user
+     */
+    async handleRemoveXP(interaction, targetUser, amount, reason, xpManager, databaseManager) {
+        try {
+            await interaction.deferReply();
+
+            // Get current user stats
+            const currentStats = await xpManager.getUserStats(targetUser.id, interaction.guild.id);
+            if (!currentStats) {
+                return await interaction.editReply({
+                    content: '❌ **User Not Found**\n\nThis user has no XP data in this server.'
+                });
+            }
+
+            const oldLevel = currentStats.level;
+            const oldTotalXP = currentStats.total_xp;
+
+            // Calculate new XP (ensure it doesn't go below 0)
+            const newTotalXP = Math.max(0, oldTotalXP - amount);
+            
+            // Use database manager to directly set the XP
+            await databaseManager.updateUserXP(targetUser.id, interaction.guild.id, -(oldTotalXP - newTotalXP), 'admin');
+            
+            // Calculate and update new level
+            const LevelCalculator = require('../utils/LevelCalculator');
+            const levelCalc = new LevelCalculator();
+            const newLevel = levelCalc.calculateLevel(newTotalXP);
+            await databaseManager.updateUserLevel(targetUser.id, interaction.guild.id, newLevel);
+
+            // Create response embed with RED text for admin
+            const embed = new EmbedBuilder()
+                .setColor('#FF0000') // Red color
+                .setTitle('⚓ MARINE COMMAND CENTER')
+                .setDescription('```diff\n- XP REMOVED SUCCESSFULLY\n```') // Red text
+                .addFields(
+                    {
+                        name: '🎯 Target',
+                        value: `${targetUser.username} (${targetUser.id})`,
+                        inline: true
+                    },
+                    {
+                        name: '📉 XP Change',
+                        value: `-${amount.toLocaleString()} XP`,
+                        inline: true
+                    },
+                    {
+                        name: '📊 Results',
+                        value: `**Before:** ${oldTotalXP.toLocaleString()} XP (Level ${oldLevel})\n**After:** ${newTotalXP.toLocaleString()} XP (Level ${newLevel})`,
+                        inline: false
+                    },
+                    {
+                        name: '📝 Reason',
+                        value: reason,
+                        inline: false
+                    }
+                )
+                .setFooter({ text: `⚓ Authorized by ${interaction.user.username} • Marine Intelligence` })
+                .setTimestamp();
+
+            await interaction.editReply({ embeds: [embed] });
+
+        } catch (error) {
+            console.error('Remove XP error:', error);
+            await interaction.editReply({
+                content: '❌ **Operation Failed**\n\nFailed to remove XP. Please try again.'
+            });
+        }
+    },
+
+    /**
+     * Handle setting user XP total
+     */
+    async handleSetXP(interaction, targetUser, amount, reason, xpManager, databaseManager) {
+        try {
+            await interaction.deferReply();
+
+            // Get current stats
+            const currentStats = await xpManager.getUserStats(targetUser.id, interaction.guild.id);
+            const oldLevel = currentStats?.level || 0;
+            const oldTotalXP = currentStats?.total_xp || 0;
+
+            // Calculate new level
+            const LevelCalculator = require('../utils/LevelCalculator');
+            const levelCalc = new LevelCalculator();
+            const newLevel = levelCalc.calculateLevel(amount);
+
+            // Set XP directly in database
+            await databaseManager.updateUserXP(targetUser.id, interaction.guild.id, amount - oldTotalXP, 'admin');
+            await databaseManager.updateUserLevel(targetUser.id, interaction.guild.id, newLevel);
+
+            // Create response embed with RED text for admin
+            const embed = new EmbedBuilder()
+                .setColor('#FF0000') // Red color
+                .setTitle('⚓ MARINE COMMAND CENTER')
+                .setDescription('```diff\n- XP SET SUCCESSFULLY\n```') // Red text
+                .addFields(
+                    {
+                        name: '🎯 Target',
+                        value: `${targetUser.username} (${targetUser.id})`,
+                        inline: true
+                    },
+                    {
+                        name: '🔄 XP Change',
+                        value: `Set to ${amount.toLocaleString()} XP`,
+                        inline: true
+                    },
+                    {
+                        name: '📊 Results',
+                        value: `**Before:** ${oldTotalXP.toLocaleString()} XP (Level ${oldLevel})\n**After:** ${amount.toLocaleString()} XP (Level ${newLevel})`,
+                        inline: false
+                    },
+                    {
+                        name: '📝 Reason',
+                        value: reason,
+                        inline: false
+                    }
+                )
+                .setFooter({ text: `⚓ Authorized by ${interaction.user.username} • Marine Intelligence` })
+                .setTimestamp();
+
+            await interaction.editReply({ embeds
