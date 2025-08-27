@@ -7,7 +7,7 @@ const XPLogger = require('../utils/XPLogger');
 
 /**
  * XPManager - Main XP tracking and management system
- * FIXED VERSION - Properly handles existing voice sessions and bot filtering
+ * FIXED VERSION - Properly handles existing voice sessions, bot filtering, and channel logging
  */
 class XPManager {
     constructor(client, db) {
@@ -227,8 +227,8 @@ class XPManager {
             
             const finalXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
 
-            // Award XP
-            await this.awardXP(userId, guildId, finalXP, 'message', message.author, member);
+            // Award XP (no channel info for messages)
+            await this.awardXP(userId, guildId, finalXP, 'message', message.author, member, null);
             
             // Set cooldown
             this.setCooldown(cooldownKey);
@@ -286,8 +286,8 @@ class XPManager {
             
             const finalXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
 
-            // Award XP
-            await this.awardXP(userId, guildId, finalXP, 'reaction', user, member);
+            // Award XP (no channel info for reactions)
+            await this.awardXP(userId, guildId, finalXP, 'reaction', user, member, null);
             
             // Set cooldown
             this.setCooldown(cooldownKey);
@@ -553,8 +553,19 @@ class XPManager {
 
             console.log(`🎤 [VOICE USER] Final XP: ${finalXP} (tier: ${tierMultiplier}x, guild: ${guildMultiplier}x)`);
 
-            // Award XP
-            await this.awardXP(session.user_id, session.guild_id, finalXP, 'voice', member.user, member);
+            // Award XP with channel information
+            await this.awardXP(
+                session.user_id, 
+                session.guild_id, 
+                finalXP, 
+                'voice', 
+                member.user, 
+                member,
+                {
+                    name: channel.name,
+                    id: channel.id
+                }
+            );
 
             // Update session last XP time (this updates both is_muted and is_deafened from current voice state)
             await this.dbManager.updateVoiceSession(
@@ -574,9 +585,9 @@ class XPManager {
     }
 
     /**
-     * Award XP and handle level ups
+     * Award XP and handle level ups - FIXED VERSION WITH PROPER CHANNEL LOGGING
      */
-    async awardXP(userId, guildId, xpAmount, source, user, member) {
+    async awardXP(userId, guildId, xpAmount, source, user, member, channelInfo = null) {
         try {
             // Apply global multiplier from environment (final multiplier)
             const globalMultiplier = parseFloat(process.env.XP_MULTIPLIER) || 1.0;
@@ -606,14 +617,23 @@ class XPManager {
                 );
             }
 
-            // Log XP activity with guild settings
-            await this.xpLogger.logXPActivity(source, user, guildId, finalXP, {
+            // Prepare additional info for logging
+            const additionalInfo = {
                 totalXP: result.total_xp,
                 currentLevel: newLevel,
                 oldLevel: oldLevel,
                 source: source,
                 member: member
-            });
+            };
+
+            // Add channel information for voice activities
+            if (source === 'voice' && channelInfo) {
+                additionalInfo.channelName = channelInfo.name;
+                additionalInfo.channelId = channelInfo.id;
+            }
+
+            // Log XP activity with proper channel info
+            await this.xpLogger.logXPActivity(source, user, guildId, finalXP, additionalInfo);
 
         } catch (error) {
             console.error('Error awarding XP:', error);
