@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
 // Admin user ID from environment
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID || '1095470472390508658';
@@ -19,8 +19,6 @@ module.exports = {
                     { name: '🔄 Set User XP Total', value: 'set-xp' },
                     { name: '🗑️ Reset User Completely', value: 'reset-user' },
                     { name: '📊 View User Stats', value: 'user-stats' },
-                    { name: '📋 Bot Statistics', value: 'bot-stats' },
-                    { name: '🔧 Database Maintenance', value: 'maintenance' },
                     { name: '🔄 Force Daily Reset', value: 'daily-reset' }
                 )
         )
@@ -114,15 +112,7 @@ module.exports = {
                     break;
 
                 case 'user-stats':
-                    await this.handleUserStats(interaction, targetUser, xpManager);
-                    break;
-
-                case 'bot-stats':
-                    await this.handleBotStats(interaction, xpManager, databaseManager);
-                    break;
-
-                case 'maintenance':
-                    await this.handleMaintenance(interaction, databaseManager);
+                    await this.handleUserStats(interaction, targetUser, xpManager, databaseManager);
                     break;
 
                 case 'daily-reset':
@@ -423,13 +413,13 @@ module.exports = {
     },
 
     /**
-     * Handle viewing user stats
+     * Handle viewing user stats - ENHANCED WITH DAILY CAP AND TIER INFO
      */
-    async handleUserStats(interaction, targetUser, xpManager) {
+    async handleUserStats(interaction, targetUser, xpManager, databaseManager) {
         try {
             await interaction.deferReply();
 
-            // Get user stats
+            // Get user stats (now includes daily stats)
             const userStats = await xpManager.getUserStats(targetUser.id, interaction.guild.id);
             if (!userStats) {
                 return await interaction.editReply({
@@ -437,11 +427,33 @@ module.exports = {
                 });
             }
 
+            // Get member for tier information
+            let member = null;
+            try {
+                member = await interaction.guild.members.fetch(targetUser.id);
+            } catch (error) {
+                console.log('Could not fetch member for stats');
+            }
+
             // Get bounty information
             const BountyCalculator = require('../utils/BountyCalculator');
             const bountyCalc = new BountyCalculator();
             const bounty = bountyCalc.getBountyForLevel(userStats.level);
             const threatLevel = bountyCalc.getThreatLevelName(userStats.level);
+
+            // Determine tier information
+            let tierInfo = 'No Tier';
+            let tierLevel = 0;
+            if (member) {
+                for (let tier = 10; tier >= 1; tier--) {
+                    const roleId = process.env[`TIER_${tier}_ROLE`];
+                    if (roleId && member.roles.cache.has(roleId)) {
+                        tierInfo = `Tier ${tier}`;
+                        tierLevel = tier;
+                        break;
+                    }
+                }
+            }
 
             // Create detailed stats embed
             const embed = new EmbedBuilder()
@@ -465,8 +477,61 @@ module.exports = {
                         value: `**Messages:** ${userStats.messages.toLocaleString()}\n**Reactions:** ${userStats.reactions.toLocaleString()}\n**Voice Time:** ${userStats.voice_time.toLocaleString()} minutes`,
                         inline: true
                     }
-                )
-                .setFooter({ text: `⚓ Marine Intelligence • Dossier compiled by ${interaction.user.username}` })
+                );
+
+            // Add daily stats information
+            if (userStats.dailyStats) {
+                const daily = userStats.dailyStats;
+                const voiceXP = daily.voiceXP || 0;
+                const messageXP = daily.messageXP || 0;
+                const reactionXP = daily.reactionXP || 0;
+
+                embed.addFields({
+                    name: '📅 Daily Progress',
+                    value: `**Daily Cap:** ${daily.dailyCap.toLocaleString()} XP\n**Used Today:** ${daily.totalXP.toLocaleString()} XP (${daily.percentage}%)\n**Remaining:** ${daily.remaining.toLocaleString()} XP\n**Tier:** ${tierInfo}`,
+                    inline: false
+                });
+
+                embed.addFields({
+                    name: '🎯 Today\'s XP Sources',
+                    value: `**Voice Chat:** ${voiceXP.toLocaleString()} XP\n**Messages:** ${messageXP.toLocaleString()} XP\n**Reactions:** ${reactionXP.toLocaleString()} XP\n**Total:** ${daily.totalXP.toLocaleString()} XP`,
+                    inline: false
+                });
+
+                // Add tier bonus information if applicable
+                if (tierLevel > 0) {
+                    const baseCap = parseInt(process.env.DAILY_XP_CAP) || 15000;
+                    const bonus = daily.dailyCap - baseCap;
+                    embed.addFields({
+                        name: '⭐ Tier Benefits',
+                        value: `**Tier Level:** ${tierLevel}\n**Base Cap:** ${baseCap.toLocaleString()} XP\n**Tier Bonus:** +${bonus.toLocaleString()} XP\n**Total Cap:** ${daily.dailyCap.toLocaleString()} XP`,
+                        inline: false
+                    });
+                }
+
+                // Add cap status
+                if (daily.isAtCap) {
+                    embed.addFields({
+                        name: '🚫 Daily Cap Status',
+                        value: '```diff\n- DAILY CAP REACHED\n- No more XP can be gained today\n- Cap resets at 7:35 PM EDT\n```',
+                        inline: false
+                    });
+                } else {
+                    const nextReset = new Date();
+                    nextReset.setHours(19, 35, 0, 0); // 7:35 PM EDT
+                    if (nextReset.getTime() <= Date.now()) {
+                        nextReset.setDate(nextReset.getDate() + 1);
+                    }
+                    
+                    embed.addFields({
+                        name: '✅ Daily Cap Status',
+                        value: `\`\`\`diff\n+ CAN STILL GAIN XP\n+ Remaining: ${daily.remaining.toLocaleString()} XP\n+ Next Reset: <t:${Math.floor(nextReset.getTime() / 1000)}:R>\n\`\`\``,
+                        inline: false
+                    });
+                }
+            }
+
+            embed.setFooter({ text: `⚓ Marine Intelligence • Dossier compiled by ${interaction.user.username}` })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
@@ -475,108 +540,6 @@ module.exports = {
             console.error('Stats error:', error);
             await interaction.editReply({
                 content: '❌ **Operation Failed**\n\nFailed to retrieve user stats. Please try again.'
-            });
-        }
-    },
-
-    /**
-     * Handle bot statistics
-     */
-    async handleBotStats(interaction, xpManager, databaseManager) {
-        try {
-            await interaction.deferReply();
-
-            // Get guild count
-            const guildCount = interaction.client.guilds.cache.size;
-            
-            // Get user count from database
-            const userResult = await databaseManager.db.query('SELECT COUNT(DISTINCT user_id) as user_count FROM user_levels');
-            const userCount = userResult.rows[0]?.user_count || 0;
-
-            // Get total XP
-            const xpResult = await databaseManager.db.query('SELECT SUM(total_xp) as total_xp, AVG(total_xp) as avg_xp FROM user_levels WHERE total_xp > 0');
-            const totalXP = xpResult.rows[0]?.total_xp || 0;
-            const avgXP = Math.round(xpResult.rows[0]?.avg_xp || 0);
-
-            // Get level distribution
-            const levelResult = await databaseManager.db.query('SELECT level, COUNT(*) as count FROM user_levels WHERE level > 0 GROUP BY level ORDER BY level DESC LIMIT 5');
-            const topLevels = levelResult.rows;
-
-            const statsEmbed = new EmbedBuilder()
-                .setColor(0xFF0000)
-                .setTitle('🏛️ MARINE INTELLIGENCE - OPERATIONAL STATISTICS')
-                .setDescription('```diff\n+ MARINE DATABASE METRICS\n+ SECURITY CLEARANCE: ADMIRAL LEVEL```')
-                .addFields(
-                    {
-                        name: '📊 Network Statistics',
-                        value: `\`\`\`yaml\nActive Guilds: ${guildCount}\nTracked Users: ${userCount}\nTotal XP Issued: ${totalXP.toLocaleString()}\nAverage XP: ${avgXP.toLocaleString()}\`\`\``,
-                        inline: false
-                    },
-                    {
-                        name: '🏆 Top Level Distribution',
-                        value: topLevels.length > 0 
-                            ? `\`\`\`yaml\n${topLevels.map(l => `Level ${l.level}: ${l.count} Marines`).join('\n')}\`\`\``
-                            : '```yaml\nNo level data available```',
-                        inline: false
-                    },
-                    {
-                        name: '⚙️ System Status',
-                        value: '```diff\n+ Database: OPERATIONAL\n+ XP Tracking: ACTIVE\n+ Voice Monitoring: ACTIVE\n+ Wanted Posters: OPERATIONAL```',
-                        inline: false
-                    }
-                )
-                .setTimestamp()
-                .setFooter({ text: 'Marine Intelligence Network' });
-
-            await interaction.editReply({ embeds: [statsEmbed] });
-
-        } catch (error) {
-            console.error('Bot stats error:', error);
-            await interaction.editReply({
-                content: '❌ **Operation Failed**\n\nFailed to retrieve bot statistics. Please try again.'
-            });
-        }
-    },
-
-    /**
-     * Handle database maintenance
-     */
-    async handleMaintenance(interaction, databaseManager) {
-        try {
-            const maintenanceButtons = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('cleanup_inactive')
-                        .setLabel('🧹 Clean Inactive Users')
-                        .setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder()
-                        .setCustomId('optimize_db')
-                        .setLabel('⚡ Optimize Database')
-                        .setStyle(ButtonStyle.Success)
-                );
-
-            const maintenanceEmbed = new EmbedBuilder()
-                .setColor(0xFF0000)
-                .setTitle('🔧 MARINE INTELLIGENCE - MAINTENANCE OPERATIONS')
-                .setDescription('```diff\n+ AUTHORIZED MAINTENANCE PROTOCOLS\n+ SELECT OPERATION TO EXECUTE```')
-                .addFields({
-                    name: '⚠️ Available Operations',
-                    value: `\`\`\`yaml\n🧹 Clean Inactive: Remove users with 0 XP and no activity\n⚡ Optimize: Rebuild database indexes and clean logs\`\`\``
-                })
-                .setTimestamp()
-                .setFooter({ text: 'Marine Intelligence - Maintenance Division' });
-
-            await interaction.reply({ 
-                embeds: [maintenanceEmbed], 
-                components: [maintenanceButtons],
-                ephemeral: true
-            });
-
-        } catch (error) {
-            console.error('Maintenance error:', error);
-            await interaction.reply({
-                content: '❌ **Maintenance Error**\n\nFailed to initialize maintenance operations.',
-                ephemeral: true
             });
         }
     },
