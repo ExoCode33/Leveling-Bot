@@ -105,7 +105,7 @@ class ConnectionManager {
 
     /**
      * Initialize Redis (PRIORITIZED but OPTIONAL with fallback)
-     * Supports both Railway REDIS_URL and individual variables
+     * Supports both Railway REDIS_URL and individual variables (Railway + standard naming)
      */
     async initializeRedis() {
         // Check if Redis module is available
@@ -140,12 +140,17 @@ class ConnectionManager {
                     retryDelayOnReconnect: 10000
                 };
             } else {
-                // Use individual Redis variables
+                // Use individual Redis variables - SUPPORTS BOTH RAILWAY AND STANDARD NAMING
+                const redisHost = process.env.REDIS_HOST || process.env.REDISHOST || 'localhost';
+                const redisPort = parseInt(process.env.REDIS_PORT || process.env.REDISPORT) || 6379;
+                const redisPassword = process.env.REDIS_PASSWORD || undefined;
+                const redisDb = parseInt(process.env.REDIS_DB) || 0;
+                
                 redisConfig = {
-                    host: process.env.REDIS_HOST || 'localhost',
-                    port: parseInt(process.env.REDIS_PORT) || 6379,
-                    password: process.env.REDIS_PASSWORD || undefined,
-                    db: parseInt(process.env.REDIS_DB) || 0,
+                    host: redisHost,
+                    port: redisPort,
+                    password: redisPassword,
+                    db: redisDb,
                     keyPrefix: 'Leveling-Bot:',
                     retryDelayOnFailover: 5000, // Slower retry: 5 seconds
                     maxRetriesPerRequest: 2, // Fewer retries
@@ -162,9 +167,9 @@ class ConnectionManager {
                 if (!redisConfig.password) {
                     delete redisConfig.password;
                 }
-            }
 
-            console.log(`🔴 Redis config: ${process.env.REDIS_URL ? 'URL connection' : `${redisConfig.host}:${redisConfig.port} (DB: ${redisConfig.db || 0})`}`);
+                console.log(`🔴 Redis config: ${redisHost}:${redisPort} (DB: ${redisDb})`);
+            }
 
             this.redis = new Redis(redisConfig);
             
