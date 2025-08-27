@@ -1,6 +1,4 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
-const CanvasGenerator = require('../utils/CanvasGenerator');
-const BountyCalculator = require('../utils/BountyCalculator');
 
 // Admin user ID from environment
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID || '1095470472390508658';
@@ -21,7 +19,7 @@ module.exports = {
                     { name: 'All The Bounties', value: 'full' }
                 )),
 
-    async execute(interaction, { xpManager, databaseManager }) {
+    async execute(interaction, { xpManager, databaseManager, cacheManager, connectionManager }) {
         try {
             // Check channel restriction (admin can use anywhere)
             if (interaction.user.id !== ADMIN_USER_ID && COMMANDS_CHANNEL && interaction.channel.id !== COMMANDS_CHANNEL) {
@@ -58,6 +56,7 @@ module.exports = {
                 if (role && role.members.size > 0) {
                     const pirateKingMember = role.members.first();
                     if (pirateKingMember) {
+                        const BountyCalculator = require('../utils/BountyCalculator');
                         const bountyCalculator = new BountyCalculator();
                         pirateKing = {
                             userId: pirateKingMember.user.id,
@@ -110,16 +109,16 @@ module.exports = {
 
             switch (type) {
                 case 'posters':
-                    await this.handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons);
+                    await this.handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager);
                     break;
                 case 'long':
-                    await this.handleLongLeaderboard(interaction, pirateKing, filteredUsers, buttons);
+                    await this.handleLongLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager);
                     break;
                 case 'full':
                     await this.handleFullLeaderboard(interaction, pirateKing, filteredUsers, buttons);
                     break;
                 default:
-                    await this.handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons);
+                    await this.handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager);
                     break;
             }
 
@@ -142,7 +141,7 @@ module.exports = {
     /**
      * Handle Top 3 Bounties (with posters)
      */
-    async handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons) {
+    async handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager) {
         // Send header
         const headerEmbed = new EmbedBuilder()
             .setAuthor({ 
@@ -166,9 +165,11 @@ module.exports = {
 
         console.log('[LEADERBOARD] Creating', postersToShow.length, 'posters for Top 3');
 
-        // Generate and send each poster
-        const canvasGenerator = new CanvasGenerator();
+        // Initialize canvas generator with cache manager
+        const CanvasGenerator = require('../utils/CanvasGenerator');
+        const canvasGenerator = new CanvasGenerator(cacheManager);
         
+        // Generate and send each poster
         for (let i = 0; i < postersToShow.length; i++) {
             const userData = postersToShow[i];
             const isPirateKingData = userData.isPirateKing || false;
@@ -185,6 +186,7 @@ module.exports = {
                     })
                     .setColor(isPirateKingData ? 0xFFD700 : 0xFF0000);
 
+                const BountyCalculator = require('../utils/BountyCalculator');
                 const bountyCalculator = new BountyCalculator();
                 let intelligenceValue = `\`\`\`diff\n- Alias: ${userData.member.displayName}\n- Bounty: ฿${userData.bounty.toLocaleString()}\n- Level: ${userData.level} | Rank: ${rank}\n- Threat: ${bountyCalculator.getThreatLevelName(userData.level, isPirateKingData)}\n- Activity: ${this.getActivityLevel(userData)}\n\`\`\``;
 
@@ -232,7 +234,7 @@ module.exports = {
     /**
      * Handle Top 10 Bounties (with posters)
      */
-    async handleLongLeaderboard(interaction, pirateKing, filteredUsers, buttons) {
+    async handleLongLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager) {
         // Send header
         const headerEmbed = new EmbedBuilder()
             .setAuthor({ 
@@ -256,9 +258,11 @@ module.exports = {
 
         console.log('[LEADERBOARD] Creating', postersToShow.length, 'posters for Top 10');
 
-        // Generate and send each poster
-        const canvasGenerator = new CanvasGenerator();
+        // Initialize canvas generator with cache manager
+        const CanvasGenerator = require('../utils/CanvasGenerator');
+        const canvasGenerator = new CanvasGenerator(cacheManager);
         
+        // Generate and send each poster
         for (let i = 0; i < postersToShow.length; i++) {
             const userData = postersToShow[i];
             const isPirateKingData = userData.isPirateKing || false;
@@ -275,6 +279,7 @@ module.exports = {
                     })
                     .setColor(isPirateKingData ? 0xFFD700 : 0xFF0000);
 
+                const BountyCalculator = require('../utils/BountyCalculator');
                 const bountyCalculator = new BountyCalculator();
                 let intelligenceValue = `\`\`\`diff\n- Alias: ${userData.member.displayName}\n- Bounty: ฿${userData.bounty.toLocaleString()}\n- Level: ${userData.level} | Rank: ${rank}\n- Threat: ${bountyCalculator.getThreatLevelName(userData.level, isPirateKingData)}\n- Activity: ${this.getActivityLevel(userData)}\n\`\`\``;
 
@@ -353,6 +358,7 @@ module.exports = {
             chunks.push(level1Plus.slice(i, i + chunkSize));
         }
 
+        const BountyCalculator = require('../utils/BountyCalculator');
         const bountyCalculator = new BountyCalculator();
 
         // Add pirates in chunks
