@@ -1030,3 +1030,5 @@ class XPManager {
         }
     }
 }
+
+module.exports = XPManager;
