@@ -4,10 +4,12 @@ const BountyCalculator = require('./BountyCalculator');
 
 /**
  * CanvasGenerator - Handles all canvas/image generation for wanted posters
+ * FIXED: Proper caching integration and avatar handling
  */
 class CanvasGenerator {
-    constructor() {
+    constructor(cacheManager = null) {
         this.bountyCalculator = new BountyCalculator();
+        this.cacheManager = cacheManager;
         this.registerFonts();
     }
 
@@ -30,15 +32,39 @@ class CanvasGenerator {
     }
 
     /**
-     * Create wanted poster canvas
+     * Create wanted poster canvas with caching
      */
     async createWantedPoster(userData, guild) {
         const width = 600;
         const height = 900;
-        const canvas = createCanvas(width, height);
-        const ctx = canvas.getContext('2d');
 
         try {
+            // Check cache first
+            const cacheKey = this.getPosterCacheKey(userData);
+            if (this.cacheManager && cacheKey) {
+                console.log(`[CANVAS] 🔍 Checking cache for poster: ${cacheKey}`);
+                const cachedBuffer = await this.cacheManager.getCachedPoster(
+                    userData.userId, 
+                    userData.level, 
+                    userData.bounty
+                );
+                
+                if (cachedBuffer) {
+                    console.log(`[CANVAS] ✅ Using cached poster for user ${userData.userId}`);
+                    // Convert buffer back to canvas for return
+                    const cachedCanvas = createCanvas(width, height);
+                    const cachedCtx = cachedCanvas.getContext('2d');
+                    const img = await loadImage(cachedBuffer);
+                    cachedCtx.drawImage(img, 0, 0);
+                    return cachedCanvas;
+                }
+            }
+
+            console.log(`[CANVAS] 🎨 Generating new poster for user ${userData.userId} (Level ${userData.level})`);
+            
+            const canvas = createCanvas(width, height);
+            const ctx = canvas.getContext('2d');
+
             // Load and draw background
             await this.drawBackground(ctx, width, height);
             
@@ -48,7 +74,7 @@ class CanvasGenerator {
             // Draw "WANTED" title
             this.drawWantedTitle(ctx, width, height);
             
-            // Draw photo frame and avatar
+            // Draw photo frame and avatar with caching
             await this.drawPhotoSection(ctx, userData, guild, width, height);
             
             // Draw "DEAD OR ALIVE"
@@ -65,6 +91,22 @@ class CanvasGenerator {
             
             // Draw "MARINE" text
             this.drawMarineText(ctx, width, height);
+
+            // Cache the completed poster
+            if (this.cacheManager && cacheKey) {
+                try {
+                    const buffer = canvas.toBuffer();
+                    await this.cacheManager.cacheWantedPoster(
+                        userData.userId, 
+                        userData.level, 
+                        userData.bounty, 
+                        buffer
+                    );
+                    console.log(`[CANVAS] ✅ Cached new poster for user ${userData.userId}`);
+                } catch (cacheError) {
+                    console.error('[CANVAS] ⚠️ Failed to cache poster:', cacheError);
+                }
+            }
             
             return canvas;
             
@@ -74,6 +116,16 @@ class CanvasGenerator {
             // Return simple fallback canvas
             return this.createFallbackCanvas(userData, width, height);
         }
+    }
+
+    /**
+     * Generate cache key for poster
+     */
+    getPosterCacheKey(userData) {
+        if (!userData.userId || userData.level === undefined || !userData.bounty) {
+            return null;
+        }
+        return `${userData.userId}_${userData.level}_${userData.bounty}`;
     }
 
     /**
@@ -128,7 +180,7 @@ class CanvasGenerator {
     }
 
     /**
-     * Draw photo section with avatar
+     * Draw photo section with avatar and caching
      */
     async drawPhotoSection(ctx, userData, guild, width, height) {
         const photoSize = (95/100) * 400;
@@ -140,31 +192,64 @@ class CanvasGenerator {
         ctx.lineWidth = 3;
         ctx.strokeRect(photoX, photoY, photoSize, photoSize);
 
-        // Try to load and draw avatar
-        let member = null;
-        try {
-            if (guild && userData.userId) {
-                member = await guild.members.fetch(userData.userId);
-            }
-        } catch (error) {
-            console.log('[CANVAS] Could not fetch member for avatar');
-        }
-        
+        // Define avatar area
         const avatarArea = { 
             x: photoX + 3, 
             y: photoY + 3, 
             width: photoSize - 6, 
             height: photoSize - 6 
         };
+
+        // Try to get member and load avatar
+        let member = null;
+        let avatarBuffer = null;
         
-        if (member) {
+        try {
+            if (guild && userData.userId) {
+                member = await guild.members.fetch(userData.userId);
+                
+                if (member) {
+                    const avatarURL = member.user.displayAvatarURL({ 
+                        extension: 'png', 
+                        size: 512, 
+                        forceStatic: true 
+                    });
+                    
+                    // Extract avatar hash for caching
+                    const avatarHash = this.extractAvatarHash(avatarURL);
+                    
+                    // Check cache first
+                    if (this.cacheManager && avatarHash) {
+                        console.log(`[CANVAS] 🔍 Checking avatar cache for user ${userData.userId}`);
+                        avatarBuffer = await this.cacheManager.getCachedAvatar(userData.userId, avatarHash);
+                    }
+                    
+                    // Load avatar if not cached
+                    if (!avatarBuffer) {
+                        console.log(`[CANVAS] 📥 Loading avatar from URL for user ${userData.userId}`);
+                        const avatar = await loadImage(avatarURL);
+                        
+                        // Convert to buffer for caching
+                        const tempCanvas = createCanvas(512, 512);
+                        const tempCtx = tempCanvas.getContext('2d');
+                        tempCtx.drawImage(avatar, 0, 0, 512, 512);
+                        avatarBuffer = tempCanvas.toBuffer();
+                        
+                        // Cache the avatar
+                        if (this.cacheManager && avatarHash) {
+                            await this.cacheManager.cacheUserAvatar(userData.userId, avatarHash, avatarBuffer);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.log(`[CANVAS] ⚠️ Could not fetch/load avatar for user ${userData.userId}:`, error.message);
+        }
+        
+        // Draw avatar if available
+        if (avatarBuffer) {
             try {
-                const avatarURL = member.user.displayAvatarURL({ 
-                    extension: 'png', 
-                    size: 512, 
-                    forceStatic: true 
-                });
-                const avatar = await loadImage(avatarURL);
+                const avatar = await loadImage(avatarBuffer);
                 
                 // Create clipping mask for avatar
                 ctx.save();
@@ -179,10 +264,25 @@ class CanvasGenerator {
                 
                 ctx.restore();
                 
-                console.log('[CANVAS] ✅ Successfully drew user avatar');
-            } catch (error) {
-                console.log('[CANVAS] Could not load avatar, texture will show through');
+                console.log(`[CANVAS] ✅ Successfully drew avatar for user ${userData.userId}`);
+            } catch (drawError) {
+                console.log(`[CANVAS] ⚠️ Could not draw cached avatar for user ${userData.userId}:`, drawError.message);
             }
+        } else {
+            console.log(`[CANVAS] ℹ️ No avatar available for user ${userData.userId}, showing background`);
+        }
+    }
+
+    /**
+     * Extract avatar hash from Discord avatar URL
+     */
+    extractAvatarHash(avatarURL) {
+        try {
+            const match = avatarURL.match(/avatars\/\d+\/([a-f0-9]+)\.(png|jpg|gif|webp)/);
+            return match ? match[1] : null;
+        } catch (error) {
+            console.log('[CANVAS] Could not extract avatar hash');
+            return null;
         }
     }
 
@@ -364,65 +464,6 @@ class CanvasGenerator {
         ctx.fillText(`฿${bounty.toLocaleString()}`, width / 2, height * 0.9);
         
         console.log('[CANVAS] ✅ Created fallback canvas');
-        return canvas;
-    }
-
-    /**
-     * Create progress bar canvas
-     */
-    createProgressBar(current, max, width = 400, height = 50) {
-        const canvas = createCanvas(width, height);
-        const ctx = canvas.getContext('2d');
-        
-        const percentage = Math.max(0, Math.min(1, current / max));
-        const filled = Math.round(percentage * (width - 4));
-        
-        // Background
-        ctx.fillStyle = '#2C2F33';
-        ctx.fillRect(0, 0, width, height);
-        
-        // Progress fill
-        ctx.fillStyle = '#7289DA';
-        ctx.fillRect(2, 2, filled, height - 4);
-        
-        // Border
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(0, 0, width, height);
-        
-        // Text
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 16px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(`${current.toLocaleString()} / ${max.toLocaleString()}`, width / 2, height / 2);
-        
-        return canvas;
-    }
-
-    /**
-     * Create rank badge canvas
-     */
-    createRankBadge(rank, size = 100) {
-        const canvas = createCanvas(size, size);
-        const ctx = canvas.getContext('2d');
-        
-        // Background circle
-        ctx.beginPath();
-        ctx.arc(size / 2, size / 2, size / 2 - 5, 0, 2 * Math.PI);
-        ctx.fillStyle = '#FFD700';
-        ctx.fill();
-        ctx.strokeStyle = '#B8860B';
-        ctx.lineWidth = 3;
-        ctx.stroke();
-        
-        // Rank text
-        ctx.fillStyle = '#000';
-        ctx.font = `bold ${size * 0.3}px Arial`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(`#${rank}`, size / 2, size / 2);
-        
         return canvas;
     }
 
