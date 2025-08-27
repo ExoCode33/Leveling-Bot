@@ -7,12 +7,13 @@ const XPLogger = require('../utils/XPLogger');
 
 /**
  * XPManager - Main XP tracking and management system
- * COMPLETE VERSION - With XP Boost Roles Support and Fixed Daily Cap Enforcement
+ * FIXED: Proper cache manager integration and XP boost role fix
  */
 class XPManager {
-    constructor(client, db) {
+    constructor(client, db, cacheManager = null) {
         this.client = client;
         this.db = db;
+        this.cacheManager = cacheManager;
         this.cooldowns = new Map();
         
         // Initialize sub-systems with proper initialization
@@ -29,7 +30,7 @@ class XPManager {
     }
 
     /**
-     * Initialize the XP manager
+     * Initialize the XP manager with cache manager
      */
     async initialize() {
         try {
@@ -173,7 +174,7 @@ class XPManager {
     }
 
     /**
-     * Handle message XP with XP boost roles support
+     * Handle message XP with XP boost roles support - FIXED
      */
     async handleMessageXP(message) {
         try {
@@ -185,12 +186,19 @@ class XPManager {
                 return;
             }
             
-            const cooldownKey = `${guildId}:${userId}:message`;
-            const cooldownMs = parseInt(process.env.MESSAGE_COOLDOWN) || 60000;
-
-            // Check cooldown
-            if (this.isOnCooldown(cooldownKey, cooldownMs)) {
-                return;
+            // Check cache-based cooldown first
+            if (this.cacheManager) {
+                const isOnCooldown = await this.cacheManager.isOnXPCooldown(userId, guildId, 'message');
+                if (isOnCooldown) {
+                    return;
+                }
+            } else {
+                // Fallback to memory cooldown
+                const cooldownKey = `${guildId}:${userId}:message`;
+                const cooldownMs = parseInt(process.env.MESSAGE_COOLDOWN) || 60000;
+                if (this.isOnCooldown(cooldownKey, cooldownMs)) {
+                    return;
+                }
             }
 
             // Get member for XP award
@@ -203,21 +211,20 @@ class XPManager {
                 return;
             }
 
-            // Get guild settings for XP values
-            const guildSettings = await this.dbManager.getGuildSettings(guildId);
-            
             // Calculate base XP
-            const minXP = guildSettings?.message_xp_min || parseInt(process.env.MESSAGE_XP_MIN) || 75;
-            const maxXP = guildSettings?.message_xp_max || parseInt(process.env.MESSAGE_XP_MAX) || 100;
+            const minXP = parseInt(process.env.MESSAGE_XP_MIN) || 75;
+            const maxXP = parseInt(process.env.MESSAGE_XP_MAX) || 100;
             const baseXP = Math.floor(Math.random() * (maxXP - minXP + 1)) + minXP;
             
-            // Apply XP boost multiplier (from roles)
+            // Apply XP boost multiplier (from roles) - FIXED CALCULATION
             const boostMultiplier = await this.dbManager.calculateXPMultiplier(member, guildId);
             
-            // Apply guild XP multiplier
-            const guildMultiplier = guildSettings?.xp_multiplier || 1.0;
+            // Apply global XP multiplier
+            const globalMultiplier = parseFloat(process.env.XP_MULTIPLIER) || 1.0;
             
-            const calculatedXP = Math.round(baseXP * boostMultiplier * guildMultiplier);
+            const calculatedXP = Math.round(baseXP * boostMultiplier * globalMultiplier);
+
+            console.log(`[XP BOOST DEBUG] ${member.displayName} message XP: base=${baseXP}, boost=${boostMultiplier.toFixed(2)}x, global=${globalMultiplier}x, final=${calculatedXP}`);
 
             // ENFORCE DAILY CAP: Only award XP up to the remaining cap amount
             const finalXP = Math.min(calculatedXP, canGainXP.remaining);
@@ -226,8 +233,15 @@ class XPManager {
             if (finalXP > 0) {
                 await this.awardXP(userId, guildId, finalXP, 'message', message.author, member, null);
                 
-                // Set cooldown
-                this.setCooldown(cooldownKey);
+                // Set cooldown in cache
+                if (this.cacheManager) {
+                    const cooldownMs = parseInt(process.env.MESSAGE_COOLDOWN) || 60000;
+                    await this.cacheManager.setXPCooldown(userId, guildId, 'message', cooldownMs);
+                } else {
+                    // Fallback cooldown
+                    const cooldownKey = `${guildId}:${userId}:message`;
+                    this.setCooldown(cooldownKey);
+                }
                 
                 // Log boost if applied
                 if (boostMultiplier > 1.0) {
@@ -241,7 +255,7 @@ class XPManager {
     }
 
     /**
-     * Handle reaction XP with XP boost roles support
+     * Handle reaction XP with XP boost roles support - FIXED
      */
     async handleReactionXP(reaction, user) {
         try {
@@ -253,12 +267,19 @@ class XPManager {
                 return;
             }
             
-            const cooldownKey = `${guildId}:${userId}:reaction`;
-            const cooldownMs = parseInt(process.env.REACTION_COOLDOWN) || 300000;
-
-            // Check cooldown
-            if (this.isOnCooldown(cooldownKey, cooldownMs)) {
-                return;
+            // Check cache-based cooldown first
+            if (this.cacheManager) {
+                const isOnCooldown = await this.cacheManager.isOnXPCooldown(userId, guildId, 'reaction');
+                if (isOnCooldown) {
+                    return;
+                }
+            } else {
+                // Fallback to memory cooldown
+                const cooldownKey = `${guildId}:${userId}:reaction`;
+                const cooldownMs = parseInt(process.env.REACTION_COOLDOWN) || 300000;
+                if (this.isOnCooldown(cooldownKey, cooldownMs)) {
+                    return;
+                }
             }
 
             // Get member
@@ -272,21 +293,20 @@ class XPManager {
                 return;
             }
 
-            // Get guild settings for XP values
-            const guildSettings = await this.dbManager.getGuildSettings(guildId);
-            
             // Calculate base XP
-            const minXP = guildSettings?.reaction_xp_min || parseInt(process.env.REACTION_XP_MIN) || 75;
-            const maxXP = guildSettings?.reaction_xp_max || parseInt(process.env.REACTION_XP_MAX) || 100;
+            const minXP = parseInt(process.env.REACTION_XP_MIN) || 75;
+            const maxXP = parseInt(process.env.REACTION_XP_MAX) || 100;
             const baseXP = Math.floor(Math.random() * (maxXP - minXP + 1)) + minXP;
             
-            // Apply XP boost multiplier (from roles)
+            // Apply XP boost multiplier (from roles) - FIXED CALCULATION
             const boostMultiplier = await this.dbManager.calculateXPMultiplier(member, guildId);
             
-            // Apply guild XP multiplier
-            const guildMultiplier = guildSettings?.xp_multiplier || 1.0;
+            // Apply global XP multiplier
+            const globalMultiplier = parseFloat(process.env.XP_MULTIPLIER) || 1.0;
             
-            const calculatedXP = Math.round(baseXP * boostMultiplier * guildMultiplier);
+            const calculatedXP = Math.round(baseXP * boostMultiplier * globalMultiplier);
+
+            console.log(`[XP BOOST DEBUG] ${member.displayName} reaction XP: base=${baseXP}, boost=${boostMultiplier.toFixed(2)}x, global=${globalMultiplier}x, final=${calculatedXP}`);
 
             // ENFORCE DAILY CAP: Only award XP up to the remaining cap amount
             const finalXP = Math.min(calculatedXP, canGainXP.remaining);
@@ -295,8 +315,15 @@ class XPManager {
             if (finalXP > 0) {
                 await this.awardXP(userId, guildId, finalXP, 'reaction', user, member, null);
                 
-                // Set cooldown
-                this.setCooldown(cooldownKey);
+                // Set cooldown in cache
+                if (this.cacheManager) {
+                    const cooldownMs = parseInt(process.env.REACTION_COOLDOWN) || 300000;
+                    await this.cacheManager.setXPCooldown(userId, guildId, 'reaction', cooldownMs);
+                } else {
+                    // Fallback cooldown
+                    const cooldownKey = `${guildId}:${userId}:reaction`;
+                    this.setCooldown(cooldownKey);
+                }
                 
                 // Log boost if applied
                 if (boostMultiplier > 1.0) {
@@ -441,7 +468,7 @@ class XPManager {
     }
 
     /**
-     * Process voice XP for individual user with XP boost roles support
+     * Process voice XP for individual user with XP boost roles support - FIXED
      */
     async processUserVoiceXP(session, guild) {
         try {
@@ -517,9 +544,8 @@ class XPManager {
             }
 
             // Calculate XP with all modifiers
-            const guildSettings = await this.dbManager.getGuildSettings(session.guild_id);
-            const minXP = guildSettings?.voice_xp_min || parseInt(process.env.VOICE_XP_MIN) || 250;
-            const maxXP = guildSettings?.voice_xp_max || parseInt(process.env.VOICE_XP_MAX) || 350;
+            const minXP = parseInt(process.env.VOICE_XP_MIN) || 250;
+            const maxXP = parseInt(process.env.VOICE_XP_MAX) || 350;
             let baseXP = Math.floor(Math.random() * (maxXP - minXP + 1)) + minXP;
 
             console.log(`🎤 [VOICE USER] Base XP calculated: ${baseXP} (range: ${minXP}-${maxXP})`);
@@ -558,17 +584,19 @@ class XPManager {
                 }
             }
 
-            // Apply XP boost multiplier (from roles)
+            // Apply XP boost multiplier (from roles) - FIXED CALCULATION
             const boostMultiplier = await this.dbManager.calculateXPMultiplier(member, session.guild_id);
             
-            // Apply guild multiplier
-            const guildMultiplier = guildSettings?.xp_multiplier || 1.0;
-            const calculatedXP = Math.round(baseXP * boostMultiplier * guildMultiplier);
+            // Apply global multiplier
+            const globalMultiplier = parseFloat(process.env.XP_MULTIPLIER) || 1.0;
+            const calculatedXP = Math.round(baseXP * boostMultiplier * globalMultiplier);
+
+            console.log(`🎤 [VOICE USER DEBUG] ${member.displayName} voice XP: base=${baseXP}, boost=${boostMultiplier.toFixed(2)}x, global=${globalMultiplier}x, final=${calculatedXP}`);
 
             // ENFORCE DAILY CAP: Only award XP up to the remaining cap amount
             const finalXP = Math.min(calculatedXP, canGainXP.remaining);
 
-            console.log(`🎤 [VOICE USER] Calculated XP: ${calculatedXP} (boost: ${boostMultiplier.toFixed(2)}x), Final XP (after cap): ${finalXP} (remaining: ${canGainXP.remaining})`);
+            console.log(`🎤 [VOICE USER] Final XP (after cap): ${finalXP} (remaining: ${canGainXP.remaining})`);
 
             // Only award if there's XP to award
             if (finalXP > 0) {
@@ -613,13 +641,12 @@ class XPManager {
     }
 
     /**
-     * Award XP and handle level ups
+     * Award XP and handle level ups - NO DOUBLE GLOBAL MULTIPLIER
      */
     async awardXP(userId, guildId, xpAmount, source, user, member, channelInfo = null) {
         try {
-            // Apply global multiplier from environment (final multiplier)
-            const globalMultiplier = parseFloat(process.env.XP_MULTIPLIER) || 1.0;
-            const finalXP = Math.round(xpAmount * globalMultiplier);
+            // DON'T apply global multiplier here - it's already applied in the individual handlers
+            const finalXP = xpAmount;
 
             // Update daily cap tracking
             await this.dailyCapManager.addXP(userId, guildId, finalXP, source, member);
@@ -635,9 +662,15 @@ class XPManager {
             // Calculate new level
             const newLevel = this.levelCalculator.calculateLevel(result.total_xp);
             
-            // Update level if changed
+            // Update level if changed and invalidate poster cache
             if (newLevel !== oldLevel) {
                 await this.dbManager.updateUserLevel(userId, guildId, newLevel);
+                
+                // Invalidate poster cache when level changes
+                if (this.cacheManager) {
+                    await this.cacheManager.invalidateUserPosters(userId);
+                    console.log(`[CACHE] ✅ Invalidated poster cache for ${user.username} (level ${oldLevel} → ${newLevel})`);
+                }
                 
                 // Handle level up with guild settings
                 await this.levelUpHandler.handleLevelUp(
@@ -798,7 +831,7 @@ class XPManager {
     }
 
     /**
-     * Cooldown management
+     * Cooldown management (fallback when no cache)
      */
     isOnCooldown(key, cooldownMs) {
         const now = Date.now();
@@ -991,6 +1024,37 @@ class XPManager {
         } catch (error) {
             console.error('Error getting XP boost info:', error);
             return { hasBoost: false, multiplier: 1.0, roles: [] };
+        }
+    }
+
+    /**
+     * Test cache functionality
+     */
+    async testCache() {
+        if (!this.cacheManager) {
+            return { success: false, message: 'No cache manager available' };
+        }
+
+        try {
+            const result = await this.cacheManager.testCache();
+            return result;
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Get cache statistics
+     */
+    async getCacheStats() {
+        if (!this.cacheManager) {
+            return { mode: 'No Cache Manager', redis: false, entries: 0 };
+        }
+
+        try {
+            return await this.cacheManager.getCacheStats();
+        } catch (error) {
+            return { mode: 'Error', redis: false, entries: 0, error: error.message };
         }
     }
 
