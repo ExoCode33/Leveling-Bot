@@ -2,6 +2,11 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const CanvasGenerator = require('../utils/CanvasGenerator');
 const BountyCalculator = require('../utils/BountyCalculator');
 
+// Admin user ID from environment
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID || '1095470472390508658';
+// Commands channel restriction
+const COMMANDS_CHANNEL = process.env.COMMANDS_CHANNEL || null;
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('leaderboard')
@@ -18,6 +23,14 @@ module.exports = {
 
     async execute(interaction, { xpManager, databaseManager }) {
         try {
+            // Check channel restriction (admin can use anywhere)
+            if (interaction.user.id !== ADMIN_USER_ID && COMMANDS_CHANNEL && interaction.channel.id !== COMMANDS_CHANNEL) {
+                return await interaction.reply({
+                    content: `❌ **Channel Restriction**\n\nThis command can only be used in <#${COMMANDS_CHANNEL}>.`,
+                    ephemeral: true
+                });
+            }
+
             const type = interaction.options.getString('type') || 'posters';
 
             // Defer reply early
