@@ -7,7 +7,7 @@ const XPLogger = require('../utils/XPLogger');
 
 /**
  * XPManager - Main XP tracking and management system
- * FIXED VERSION - Properly handles existing voice sessions, bot filtering, and channel logging
+ * FIXED VERSION - Properly enforces daily caps and prevents exceeding them
  */
 class XPManager {
     constructor(client, db) {
@@ -205,7 +205,7 @@ class XPManager {
             const member = message.member;
             if (!member) return;
 
-            // Check daily cap
+            // Check daily cap BEFORE calculating XP
             const canGainXP = await this.dailyCapManager.canGainXP(userId, guildId, member);
             if (!canGainXP.allowed) {
                 return;
@@ -225,13 +225,18 @@ class XPManager {
             // Apply guild XP multiplier
             const guildMultiplier = guildSettings?.xp_multiplier || 1.0;
             
-            const finalXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
+            const calculatedXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
 
-            // Award XP (no channel info for messages)
-            await this.awardXP(userId, guildId, finalXP, 'message', message.author, member, null);
-            
-            // Set cooldown
-            this.setCooldown(cooldownKey);
+            // ENFORCE DAILY CAP: Only award XP up to the remaining cap amount
+            const finalXP = Math.min(calculatedXP, canGainXP.remaining);
+
+            // Only award if there's XP to award
+            if (finalXP > 0) {
+                await this.awardXP(userId, guildId, finalXP, 'message', message.author, member, null);
+                
+                // Set cooldown
+                this.setCooldown(cooldownKey);
+            }
 
         } catch (error) {
             console.error('Error handling message XP:', error);
@@ -264,7 +269,7 @@ class XPManager {
             const member = await guild.members.fetch(userId).catch(() => null);
             if (!member) return;
 
-            // Check daily cap
+            // Check daily cap BEFORE calculating XP
             const canGainXP = await this.dailyCapManager.canGainXP(userId, guildId, member);
             if (!canGainXP.allowed) {
                 return;
@@ -284,13 +289,18 @@ class XPManager {
             // Apply guild XP multiplier
             const guildMultiplier = guildSettings?.xp_multiplier || 1.0;
             
-            const finalXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
+            const calculatedXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
 
-            // Award XP (no channel info for reactions)
-            await this.awardXP(userId, guildId, finalXP, 'reaction', user, member, null);
-            
-            // Set cooldown
-            this.setCooldown(cooldownKey);
+            // ENFORCE DAILY CAP: Only award XP up to the remaining cap amount
+            const finalXP = Math.min(calculatedXP, canGainXP.remaining);
+
+            // Only award if there's XP to award
+            if (finalXP > 0) {
+                await this.awardXP(userId, guildId, finalXP, 'reaction', user, member, null);
+                
+                // Set cooldown
+                this.setCooldown(cooldownKey);
+            }
 
         } catch (error) {
             console.error('Error handling reaction XP:', error);
@@ -497,7 +507,7 @@ class XPManager {
                 return { xpAwarded: 0, reason: 'insufficient_human_members' };
             }
 
-            // Check daily cap
+            // Check daily cap BEFORE calculating XP
             const canGainXP = await this.dailyCapManager.canGainXP(session.user_id, session.guild_id, member);
             if (!canGainXP.allowed) {
                 console.log(`🎤 [VOICE USER] ${member.user.username} has reached daily XP cap (${canGainXP.currentXP}/${canGainXP.dailyCap})`);
@@ -549,34 +559,43 @@ class XPManager {
             // Apply multipliers
             const tierMultiplier = await this.getTierMultiplier(member);
             const guildMultiplier = guildSettings?.xp_multiplier || 1.0;
-            const finalXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
+            const calculatedXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
 
-            console.log(`🎤 [VOICE USER] Final XP: ${finalXP} (tier: ${tierMultiplier}x, guild: ${guildMultiplier}x)`);
+            // ENFORCE DAILY CAP: Only award XP up to the remaining cap amount
+            const finalXP = Math.min(calculatedXP, canGainXP.remaining);
 
-            // Award XP with channel information
-            await this.awardXP(
-                session.user_id, 
-                session.guild_id, 
-                finalXP, 
-                'voice', 
-                member.user, 
-                member,
-                {
-                    name: channel.name,
-                    id: channel.id
-                }
-            );
+            console.log(`🎤 [VOICE USER] Calculated XP: ${calculatedXP}, Final XP (after cap): ${finalXP} (remaining: ${canGainXP.remaining})`);
 
-            // Update session last XP time (this updates both is_muted and is_deafened from current voice state)
-            await this.dbManager.updateVoiceSession(
-                session.user_id, 
-                session.guild_id, 
-                memberVoiceState.mute || memberVoiceState.selfMute || false,
-                memberVoiceState.deaf || memberVoiceState.selfDeaf || false
-            );
+            // Only award if there's XP to award
+            if (finalXP > 0) {
+                // Award XP with channel information
+                await this.awardXP(
+                    session.user_id, 
+                    session.guild_id, 
+                    finalXP, 
+                    'voice', 
+                    member.user, 
+                    member,
+                    {
+                        name: channel.name,
+                        id: channel.id
+                    }
+                );
 
-            console.log(`🎤 [VOICE USER] ✅ Successfully awarded ${finalXP} XP to ${member.user.username}`);
-            return { xpAwarded: finalXP, reason: 'success' };
+                // Update session last XP time (this updates both is_muted and is_deafened from current voice state)
+                await this.dbManager.updateVoiceSession(
+                    session.user_id, 
+                    session.guild_id, 
+                    memberVoiceState.mute || memberVoiceState.selfMute || false,
+                    memberVoiceState.deaf || memberVoiceState.selfDeaf || false
+                );
+
+                console.log(`🎤 [VOICE USER] ✅ Successfully awarded ${finalXP} XP to ${member.user.username}`);
+                return { xpAwarded: finalXP, reason: 'success' };
+            } else {
+                console.log(`🎤 [VOICE USER] ❌ No XP to award (would exceed daily cap)`);
+                return { xpAwarded: 0, reason: 'daily_cap_would_exceed' };
+            }
 
         } catch (error) {
             console.error(`🎤 [VOICE USER] ❌ Error processing voice XP for ${session.user_id}:`, error);
@@ -777,7 +796,7 @@ class XPManager {
     }
 
     /**
-     * Get current user stats
+     * Get current user stats with daily information
      */
     async getUserStats(userId, guildId) {
         try {
@@ -787,10 +806,25 @@ class XPManager {
             const rank = await this.dbManager.getUserRank(userId, guildId);
             const bounty = this.bountyCalculator.getBountyForLevel(userData.level);
             
+            // Get member for tier information
+            let member = null;
+            try {
+                const guild = this.client.guilds.cache.get(guildId);
+                if (guild) {
+                    member = await guild.members.fetch(userId);
+                }
+            } catch (error) {
+                console.log('Could not fetch member for stats');
+            }
+
+            // Get daily stats
+            const dailyStats = await this.dailyCapManager.getDailyStats(userId, guildId, member);
+            
             return {
                 ...userData,
                 rank,
-                bounty
+                bounty,
+                dailyStats
             };
         } catch (error) {
             console.error('Error getting user stats:', error);
