@@ -1,10 +1,14 @@
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
+// Admin user ID from environment
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID || '1095470472390508658';
+// Commands channel restriction
+const COMMANDS_CHANNEL = process.env.COMMANDS_CHANNEL || null;
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('settings')
-        .setDescription('🔧 Configure server XP settings (Administrator only)')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDescription('🔧 Configure server XP settings (Admin Only)')
         .addStringOption(option =>
             option
                 .setName('action')
@@ -45,13 +49,16 @@ module.exports = {
 
     async execute(interaction, { xpManager, databaseManager }) {
         try {
-            // Check administrator permissions
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+            // Check if user is authorized admin
+            if (interaction.user.id !== ADMIN_USER_ID) {
                 return await interaction.reply({
-                    content: '❌ **Access Denied**\n\nYou need Administrator permissions to use this command.',
+                    content: '❌ **Access Denied**\n\n⚓ **Marine Command Center** requires special authorization.\n\nOnly authorized Marine officers may access these commands.',
                     ephemeral: true
                 });
             }
+
+            // Check channel restriction for non-admin users (admin can use anywhere)
+            // Since we already checked admin above, this section is now irrelevant but keeping for consistency
 
             const action = interaction.options.getString('action');
             const channel = interaction.options.getChannel('channel');
@@ -376,6 +383,11 @@ module.exports = {
                         name: '🎯 Tier Bonuses (Daily Cap)',
                         value: this.getTierBonusInfo(),
                         inline: false
+                    },
+                    {
+                        name: '🔐 Access Control',
+                        value: `**Admin User:** <@${ADMIN_USER_ID}>\n**Commands Channel:** ${COMMANDS_CHANNEL ? `<#${COMMANDS_CHANNEL}>` : 'Any Channel (Admin Only)'}`,
+                        inline: false
                     }
                 )
                 .setFooter({ text: '⚓ Marine Intelligence • Settings Overview' })
@@ -430,16 +442,6 @@ module.exports = {
 
         let info = '';
         let totalMultiplier = 1.0;
-        
-        for (const boost of boostRoles) {
-            const role = guild.roles.cache.get(boost.role_id);
-            const roleName = role ? role.name : 'Unknown Role';
-            const percentage = Math.round((boost.multiplier - 1) * 100);
-            
-            info += `**${roleName}:** ${boost.multiplier}x (+${percentage}%)\n`;
-            totalMultiplier += (boost.multiplier - 1); // Additive multipliers
-        }
-        
         if (boostRoles.length > 1) {
             const totalPercentage = Math.round((totalMultiplier - 1) * 100);
             info += `\n**Combined Effect:** ${totalMultiplier.toFixed(2)}x (+${totalPercentage}%)`;
