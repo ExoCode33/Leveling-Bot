@@ -520,8 +520,19 @@ module.exports = {
                         inline: false
                     });
                 } else {
-                    // Calculate next reset time properly using the same logic as DailyCapManager
-                    const nextResetTimestamp = this.calculateNextResetTimestamp();
+                    // Use DailyCapManager's method for consistent reset timestamp
+                    let nextResetTimestamp;
+                    try {
+                        if (xpManager?.dailyCapManager?.getNextResetTimestamp) {
+                            nextResetTimestamp = xpManager.dailyCapManager.getNextResetTimestamp();
+                        } else {
+                            // Fallback calculation
+                            nextResetTimestamp = this.calculateNextResetTimestamp();
+                        }
+                    } catch (error) {
+                        // Ultimate fallback
+                        nextResetTimestamp = this.calculateNextResetTimestamp();
+                    }
                     
                     embed.addFields({
                         name: '✅ Daily Cap Status',
