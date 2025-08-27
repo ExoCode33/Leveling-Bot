@@ -109,7 +109,7 @@ class XPLogger {
     }
 
     /**
-     * Create batched voice activity embed - ENHANCED WITH DAILY PROGRESS
+     * Create batched voice activity embed - FIXED FORMATTING
      */
     async createBatchedVoiceEmbed(batch) {
         const guild = this.client.guilds.cache.get(batch.guildId);
@@ -154,7 +154,7 @@ class XPLogger {
             }
         }
 
-        // Add participant details with daily cap progress
+        // Add participant details with daily cap progress - FIXED FORMAT
         let participantDetails = '';
         let participantCount = 0;
 
@@ -174,7 +174,8 @@ class XPLogger {
                     if (percentage >= 90) statusIcon = '🔴'; // Red - at/near cap
                     else if (percentage >= 70) statusIcon = '🟡'; // Yellow - approaching cap
                     
-                    dailyProgress = `\n    ${statusIcon} Daily: ${dailyStats.totalXP.toLocaleString()}/${dailyStats.dailyCap.toLocaleString()} (${percentage}%) ${progressBar}`;
+                    // FIXED FORMAT: Level X | XP current/cap instead of separate lines
+                    dailyProgress = `\n    ${statusIcon} Level ${userActivity.finalLevel} | XP ${dailyStats.totalXP.toLocaleString()}/${dailyStats.dailyCap.toLocaleString()} (${percentage}%) ${progressBar}`;
                     
                     // Add tier info if applicable
                     if (dailyStats.tierLevel > 0) {
@@ -184,12 +185,11 @@ class XPLogger {
                     }
                 }
             } catch (error) {
-                // Silently handle errors
-                dailyProgress = '\n    ❓ Daily progress unavailable';
+                // Silently handle errors with basic info
+                dailyProgress = `\n    ❓ Level ${userActivity.finalLevel} | Total: ${userActivity.finalTotalXP.toLocaleString()} XP`;
             }
 
-            participantDetails += `**${userActivity.user.username}** (+${userActivity.totalXP} XP in ${userActivity.sessions} sessions)\n`;
-            participantDetails += `    📈 Level: ${userActivity.finalLevel} | Total: ${userActivity.finalTotalXP.toLocaleString()}${dailyProgress}\n\n`;
+            participantDetails += `**${userActivity.user.username}** (+${userActivity.totalXP} XP in ${userActivity.sessions} sessions)${dailyProgress}\n\n`;
 
             // Limit to prevent embed size issues
             if (participantCount >= 6) {
