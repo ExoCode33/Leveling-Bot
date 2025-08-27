@@ -1,12 +1,19 @@
 const { Pool } = require('pg');
 
-// Try to load Redis, but make it optional
-let Redis;
+// Try to load Redis, but make it optional - handle require-time errors
+let Redis = null;
+let redisAvailable = false;
+
 try {
     Redis = require('ioredis');
+    redisAvailable = true;
+    console.log('📦 ioredis module loaded successfully');
 } catch (error) {
     console.warn('⚠️ ioredis module not found - Redis caching disabled');
+    console.warn('⚠️ To enable Redis caching: npm install ioredis');
+    console.warn('⚠️ Bot will continue with in-memory fallback cache');
     Redis = null;
+    redisAvailable = false;
 }
 
 /**
@@ -100,9 +107,10 @@ class ConnectionManager {
      */
     async initializeRedis() {
         // Check if Redis module is available
-        if (!Redis) {
+        if (!redisAvailable || !Redis) {
             console.warn('⚠️ Redis module not available - continuing without Redis caching');
             console.warn('⚠️ Install with: npm install ioredis');
+            console.warn('⚠️ Bot functionality: 100% (performance: standard mode)');
             this.redisConnected = false;
             this.redis = null;
             return;
@@ -507,7 +515,7 @@ class ConnectionManager {
      */
     async reconnectRedis() {
         // Check if Redis module is available
-        if (!Redis) {
+        if (!redisAvailable || !Redis) {
             console.warn('⚠️ Cannot reconnect Redis - ioredis module not available');
             console.warn('⚠️ Install with: npm install ioredis');
             return false;
