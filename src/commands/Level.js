@@ -1,7 +1,4 @@
 const { SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require('discord.js');
-const CanvasGenerator = require('../utils/CanvasGenerator');
-const BountyCalculator = require('../utils/BountyCalculator');
-const LevelCalculator = require('../utils/LevelCalculator');
 
 // Admin user ID from environment
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID || '1095470472390508658';
@@ -17,7 +14,7 @@ module.exports = {
                 .setDescription('User to check level for')
                 .setRequired(false)),
 
-    async execute(interaction, { xpManager, databaseManager }) {
+    async execute(interaction, { xpManager, databaseManager, cacheManager }) {
         try {
             // Check channel restriction (admin can use anywhere)
             if (interaction.user.id !== ADMIN_USER_ID && COMMANDS_CHANNEL && interaction.channel.id !== COMMANDS_CHANNEL) {
@@ -64,6 +61,8 @@ module.exports = {
             }
 
             let userData;
+            const BountyCalculator = require('../utils/BountyCalculator');
+            const LevelCalculator = require('../utils/LevelCalculator');
             const bountyCalculator = new BountyCalculator();
             const levelCalculator = new LevelCalculator();
 
@@ -102,8 +101,9 @@ module.exports = {
                 };
             }
 
-            // Create wanted poster canvas
-            const canvasGenerator = new CanvasGenerator();
+            // Create wanted poster canvas with cache manager
+            const CanvasGenerator = require('../utils/CanvasGenerator');
+            const canvasGenerator = new CanvasGenerator(cacheManager);
             const canvas = await canvasGenerator.createWantedPoster(userData, interaction.guild);
             const attachment = new AttachmentBuilder(canvas.toBuffer(), { name: `wanted_${targetUser.id}.png` });
 
