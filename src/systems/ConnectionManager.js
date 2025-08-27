@@ -135,7 +135,7 @@ class ConnectionManager {
                     connectTimeout: 10000,
                     commandTimeout: 5000,
                     enableOfflineQueue: false,
-                    family: 4,
+                    family: 0,
                     retryDelayOnClusterDown: 10000,
                     retryDelayOnReconnect: 10000
                 };
@@ -158,7 +158,7 @@ class ConnectionManager {
                     connectTimeout: 10000,
                     commandTimeout: 5000,
                     enableOfflineQueue: false,
-                    family: 4,
+                    family: 0,
                     retryDelayOnClusterDown: 10000, // 10 second delay on cluster down
                     retryDelayOnReconnect: 10000, // 10 second delay on reconnect
                 };
