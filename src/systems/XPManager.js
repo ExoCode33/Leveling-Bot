@@ -7,7 +7,7 @@ const XPLogger = require('../utils/XPLogger');
 
 /**
  * XPManager - Main XP tracking and management system
- * DEBUG VERSION - Enhanced logging for voice session troubleshooting
+ * FIXED VERSION - Properly handles existing voice sessions and bot filtering
  */
 class XPManager {
     constructor(client, db) {
@@ -22,10 +22,14 @@ class XPManager {
         this.dailyCapManager = new DailyCapManager(db);
         this.levelUpHandler = new LevelUpHandler(client, db);
         this.xpLogger = new XPLogger(client);
+        
+        // Track voice processing state
+        this.isProcessingVoice = false;
+        this.voiceProcessingInterval = null;
     }
 
     /**
-     * Initialize the XP manager - UPDATED WITH FIXED VOICE SESSION SYNC
+     * Initialize the XP manager - FIXED VERSION
      */
     async initialize() {
         try {
@@ -37,8 +41,16 @@ class XPManager {
             // Clean up any existing orphaned sessions first
             await this.cleanupOrphanedVoiceSessions();
             
-            // Sync existing voice sessions on startup with proper timing
-            await this.syncExistingVoiceSessions();
+            // Wait for client to be fully ready before syncing
+            if (this.client.isReady()) {
+                await this.syncExistingVoiceSessions();
+            } else {
+                // Wait for ready event
+                this.client.once('ready', async () => {
+                    console.log('🎤 [VOICE SYNC] Client ready, starting voice session sync...');
+                    await this.syncExistingVoiceSessions();
+                });
+            }
             
             // Start voice XP processing interval
             this.startVoiceXPProcessing();
@@ -54,128 +66,117 @@ class XPManager {
     }
 
     /**
-     * Sync existing voice sessions on bot startup - ENHANCED DEBUG VERSION
+     * Sync existing voice sessions on bot startup - COMPLETELY REWRITTEN AND FIXED
      */
     async syncExistingVoiceSessions() {
         try {
-            console.log('🎤 [VOICE SYNC] Starting voice session sync...');
-            console.log(`🎤 [VOICE SYNC] Bot is connected to ${this.client.guilds.cache.size} guilds`);
+            console.log('🎤 [VOICE SYNC] ==================== STARTING VOICE SYNC ====================');
+            console.log(`🎤 [VOICE SYNC] Bot connected to ${this.client.guilds.cache.size} guilds`);
             console.log(`🎤 [VOICE SYNC] Bot ready state: ${this.client.isReady()}`);
             
             let totalSynced = 0;
             let totalIgnored = 0;
             let totalErrors = 0;
             
+            // Process each guild
             for (const [guildId, guild] of this.client.guilds.cache) {
                 try {
-                    console.log(`🎤 [VOICE SYNC] === Checking guild: ${guild.name} (${guild.id}) ===`);
+                    console.log(`🎤 [VOICE SYNC] === Processing guild: ${guild.name} (${guildId}) ===`);
                     
-                    // Get all channels and filter for voice channels
-                    const allChannels = guild.channels.cache;
-                    console.log(`🎤 [VOICE SYNC] Guild has ${allChannels.size} total channels`);
+                    // Get all voice channels in this guild
+                    const voiceChannels = guild.channels.cache.filter(channel => 
+                        channel.type === 2 && // GUILD_VOICE = 2
+                        channel.members && 
+                        channel.members.size > 0
+                    );
                     
-                    const voiceChannels = allChannels.filter(channel => {
-                        console.log(`🎤 [VOICE SYNC] Channel: ${channel.name}, Type: ${channel.type}, IsVoice: ${channel.type === 2}`);
-                        return channel.type === 2; // GUILD_VOICE = 2
-                    });
-                    
-                    console.log(`🎤 [VOICE SYNC] Found ${voiceChannels.size} voice channels in ${guild.name}`);
+                    console.log(`🎤 [VOICE SYNC] Found ${voiceChannels.size} non-empty voice channels`);
                     
                     if (voiceChannels.size === 0) {
-                        console.log(`🎤 [VOICE SYNC] No voice channels found in ${guild.name}, skipping`);
+                        console.log(`🎤 [VOICE SYNC] No active voice channels in ${guild.name}, skipping`);
                         continue;
                     }
                     
+                    // Process each voice channel with members
                     for (const [channelId, channel] of voiceChannels) {
-                        try {
-                            console.log(`🎤 [VOICE SYNC] --- Checking voice channel: ${channel.name} (${channelId}) ---`);
-                            console.log(`🎤 [VOICE SYNC] Channel members size: ${channel.members?.size || 0}`);
-                            
-                            if (!channel.members || channel.members.size === 0) {
-                                console.log(`🎤 [VOICE SYNC] Channel ${channel.name} is empty, skipping`);
-                                continue;
-                            }
-                            
-                            console.log(`🎤 [VOICE SYNC] Processing ${channel.members.size} members in ${channel.name}:`);
-                            
-                            for (const [userId, member] of channel.members) {
-                                try {
-                                    console.log(`🎤 [VOICE SYNC] Member: ${member.user.username}#${member.user.discriminator} (${userId})`);
-                                    console.log(`🎤 [VOICE SYNC] - Is bot: ${member.user.bot}`);
-                                    console.log(`🎤 [VOICE SYNC] - Voice state: muted=${member.voice.mute || member.voice.selfMute}, deafened=${member.voice.deaf || member.voice.selfDeaf}`);
-                                    console.log(`🎤 [VOICE SYNC] - Current channel: ${member.voice.channelId}`);
-                                    
-                                    // IGNORE BOTS
-                                    if (member.user.bot) {
-                                        console.log(`🎤 [VOICE SYNC] ❌ Ignoring bot: ${member.user.username}`);
-                                        totalIgnored++;
-                                        continue;
-                                    }
-                                    
-                                    // Double-check they're actually in this channel
-                                    if (member.voice.channelId !== channelId) {
-                                        console.log(`🎤 [VOICE SYNC] ❌ Member ${member.user.username} voice state doesn't match channel`);
-                                        console.log(`🎤 [VOICE SYNC] Expected: ${channelId}, Actual: ${member.voice.channelId}`);
-                                        continue;
-                                    }
-                                    
-                                    console.log(`🎤 [VOICE SYNC] ✅ Processing voice session for: ${member.user.username}`);
-                                    
-                                    // Create voice session for existing user with ADJUSTED TIMING
-                                    // Set last_xp_time to allow immediate XP processing
-                                    const adjustedTime = new Date(Date.now() - (parseInt(process.env.VOICE_COOLDOWN) || 300000));
-                                    console.log(`🎤 [VOICE SYNC] Adjusted time for ${member.user.username}: ${adjustedTime.toISOString()}`);
-                                    
-                                    const result = await this.dbManager.setVoiceSessionWithTime(
-                                        userId,
-                                        guildId,
-                                        channelId,
-                                        member.voice.mute || member.voice.selfMute || false,
-                                        member.voice.deaf || member.voice.selfDeaf || false,
-                                        adjustedTime // This allows immediate XP processing
-                                    );
-                                    
-                                    if (result) {
-                                        totalSynced++;
-                                        console.log(`🎤 [VOICE SYNC] ✅ Successfully synced voice session for ${member.user.username}`);
-                                    } else {
-                                        console.log(`🎤 [VOICE SYNC] ❌ Failed to sync voice session for ${member.user.username}`);
-                                        totalErrors++;
-                                    }
-                                    
-                                } catch (memberError) {
-                                    console.error(`🎤 [VOICE SYNC] ❌ Error processing member ${userId}:`, memberError);
+                        console.log(`🎤 [VOICE SYNC] --- Processing channel: ${channel.name} (${channelId}) ---`);
+                        console.log(`🎤 [VOICE SYNC] Channel has ${channel.members.size} total members`);
+                        
+                        // Get only human members (filter out bots)
+                        const humanMembers = channel.members.filter(member => !member.user.bot);
+                        console.log(`🎤 [VOICE SYNC] Channel has ${humanMembers.size} human members`);
+                        
+                        if (humanMembers.size === 0) {
+                            console.log(`🎤 [VOICE SYNC] No human members in ${channel.name}, skipping`);
+                            continue;
+                        }
+                        
+                        // Process each human member
+                        for (const [userId, member] of humanMembers) {
+                            try {
+                                console.log(`🎤 [VOICE SYNC] Processing member: ${member.user.username} (${userId})`);
+                                
+                                // Double-check voice state
+                                const voiceState = member.voice;
+                                if (!voiceState || voiceState.channelId !== channelId) {
+                                    console.log(`🎤 [VOICE SYNC] ❌ ${member.user.username} voice state mismatch, skipping`);
+                                    continue;
+                                }
+                                
+                                console.log(`🎤 [VOICE SYNC] Voice state: muted=${voiceState.mute || voiceState.selfMute}, deafened=${voiceState.deaf || voiceState.selfDeaf}`);
+                                
+                                // Create voice session with adjusted timing for immediate XP processing
+                                const cooldownMs = parseInt(process.env.VOICE_COOLDOWN) || 300000; // 5 minutes
+                                const adjustedTime = new Date(Date.now() - cooldownMs - 10000); // Extra 10 seconds buffer
+                                
+                                console.log(`🎤 [VOICE SYNC] Setting session time to: ${adjustedTime.toISOString()}`);
+                                
+                                const result = await this.dbManager.setVoiceSessionWithTime(
+                                    userId,
+                                    guildId,
+                                    channelId,
+                                    voiceState.mute || voiceState.selfMute || false,
+                                    voiceState.deaf || voiceState.selfDeaf || false,
+                                    adjustedTime
+                                );
+                                
+                                if (result) {
+                                    totalSynced++;
+                                    console.log(`🎤 [VOICE SYNC] ✅ Successfully synced: ${member.user.username}`);
+                                } else {
+                                    console.log(`🎤 [VOICE SYNC] ❌ Failed to sync: ${member.user.username}`);
                                     totalErrors++;
                                 }
+                                
+                            } catch (memberError) {
+                                console.error(`🎤 [VOICE SYNC] ❌ Error processing member ${userId}:`, memberError);
+                                totalErrors++;
                             }
-                        } catch (channelError) {
-                            console.error(`🎤 [VOICE SYNC] ❌ Error processing channel ${channel.name}:`, channelError);
-                            totalErrors++;
                         }
                     }
+                    
                 } catch (guildError) {
                     console.error(`🎤 [VOICE SYNC] ❌ Error processing guild ${guild.name}:`, guildError);
                     totalErrors++;
                 }
             }
             
-            console.log(`🎤 [VOICE SYNC] === SYNC COMPLETE ===`);
+            console.log(`🎤 [VOICE SYNC] ==================== SYNC COMPLETE ====================`);
             console.log(`🎤 [VOICE SYNC] ✅ Users synced: ${totalSynced}`);
             console.log(`🎤 [VOICE SYNC] ❌ Bots ignored: ${totalIgnored}`);
             console.log(`🎤 [VOICE SYNC] ⚠️ Errors: ${totalErrors}`);
             
-            // Process voice XP immediately for synced sessions
+            // Immediately process XP for synced sessions if any
             if (totalSynced > 0) {
-                console.log(`🎤 [VOICE SYNC] Processing initial XP for ${totalSynced} synced sessions in 5 seconds...`);
-                setTimeout(() => {
-                    console.log(`🎤 [VOICE SYNC] Triggering immediate XP processing...`);
-                    this.processVoiceXP().catch(console.error);
-                }, 5000); // Give 5 seconds for everything to settle
-            } else {
-                console.log(`🎤 [VOICE SYNC] No users to sync - no one in voice channels or all were bots`);
+                console.log(`🎤 [VOICE SYNC] Scheduling immediate XP processing for ${totalSynced} users in 10 seconds...`);
+                setTimeout(async () => {
+                    console.log(`🎤 [VOICE SYNC] ⚡ Triggering immediate XP processing...`);
+                    await this.processVoiceXP();
+                }, 10000);
             }
+            
         } catch (error) {
-            console.error('❌ Error syncing existing voice sessions:', error);
+            console.error('❌ Critical error in voice session sync:', error);
         }
     }
 
@@ -297,7 +298,7 @@ class XPManager {
     }
 
     /**
-     * Handle voice state updates - CORRECTED WITH BOT FILTERING
+     * Handle voice state updates - FIXED WITH PROPER BOT FILTERING
      */
     async handleVoiceStateUpdate(oldState, newState) {
         try {
@@ -312,14 +313,14 @@ class XPManager {
             const member = guild.members.cache.get(userId);
             if (!member) return;
             
-            // IGNORE BOTS - CRITICAL FIX
+            // CRITICAL: IGNORE BOTS
             if (member.user.bot) {
                 console.log(`🎤 [VOICE] Ignoring bot voice state change: ${member.user.username}`);
                 return;
             }
 
-            console.log(`🎤 [VOICE DEBUG] Processing voice state update for ${member.user.username}`);
-            console.log(`🎤 [VOICE DEBUG] Old channel: ${oldState.channelId}, New channel: ${newState.channelId}`);
+            console.log(`🎤 [VOICE] Processing voice state update for ${member.user.username}`);
+            console.log(`🎤 [VOICE] Old channel: ${oldState.channelId}, New channel: ${newState.channelId}`);
 
             // User joined a voice channel
             if (!oldState.channelId && newState.channelId) {
@@ -346,11 +347,10 @@ class XPManager {
                 const oldDeafened = oldState.deaf || oldState.selfDeaf;
                 const newDeafened = newState.deaf || newState.selfDeaf;
                 
-                // If moved channels
+                // If moved channels, reset the session
                 if (oldState.channelId !== newState.channelId) {
                     console.log(`🎤 [VOICE] ${member.user.username} moved to ${newState.channel.name}`);
                     
-                    // Reset session for new channel
                     await this.dbManager.setVoiceSession(
                         userId, 
                         guildId, 
@@ -372,41 +372,64 @@ class XPManager {
     }
 
     /**
-     * Process voice XP for all active sessions - CORRECTED WITH BOT FILTERING
+     * Process voice XP for all active sessions - COMPLETELY REWRITTEN
      */
     async processVoiceXP() {
+        // Prevent multiple simultaneous voice processing
+        if (this.isProcessingVoice) {
+            console.log(`🎤 [VOICE DEBUG] Voice XP processing already in progress, skipping...`);
+            return;
+        }
+
+        this.isProcessingVoice = true;
+        
         try {
-            console.log(`🎤 [VOICE DEBUG] Processing voice XP for all guilds...`);
+            console.log(`🎤 [VOICE DEBUG] ================ STARTING VOICE XP PROCESSING ================`);
             
-            // Get all voice sessions
-            const guilds = this.client.guilds.cache;
-            let totalSessionsProcessed = 0;
+            let totalSessionsChecked = 0;
             let totalXPAwarded = 0;
+            let totalUsersAwarded = 0;
+            let totalSessionsRemoved = 0;
             
-            for (const [guildId, guild] of guilds) {
+            // Process each guild
+            for (const [guildId, guild] of this.client.guilds.cache) {
                 const sessions = await this.dbManager.getVoiceSessions(guildId);
-                console.log(`🎤 [VOICE DEBUG] Guild ${guild.name}: ${sessions.length} active voice sessions`);
+                console.log(`🎤 [VOICE DEBUG] Guild ${guild.name}: Processing ${sessions.length} voice sessions`);
+                
+                if (sessions.length === 0) continue;
                 
                 for (const session of sessions) {
+                    totalSessionsChecked++;
                     const result = await this.processUserVoiceXP(session, guild);
+                    
                     if (result.xpAwarded > 0) {
                         totalXPAwarded += result.xpAwarded;
-                        totalSessionsProcessed++;
+                        totalUsersAwarded++;
+                        console.log(`🎤 [VOICE DEBUG] ✅ Awarded ${result.xpAwarded} XP to user ${session.user_id}`);
+                    } else if (result.reason === 'session_removed') {
+                        totalSessionsRemoved++;
+                        console.log(`🎤 [VOICE DEBUG] 🗑️ Removed invalid session for user ${session.user_id}: ${result.reason}`);
+                    } else {
+                        console.log(`🎤 [VOICE DEBUG] ❌ No XP for user ${session.user_id}: ${result.reason}`);
                     }
                 }
             }
             
-            if (totalSessionsProcessed > 0) {
-                console.log(`🎤 [VOICE DEBUG] Processed ${totalSessionsProcessed} sessions, awarded ${totalXPAwarded} total XP`);
-            }
-
+            console.log(`🎤 [VOICE DEBUG] ================ VOICE XP PROCESSING COMPLETE ================`);
+            console.log(`🎤 [VOICE DEBUG] Sessions checked: ${totalSessionsChecked}`);
+            console.log(`🎤 [VOICE DEBUG] Users awarded XP: ${totalUsersAwarded}`);
+            console.log(`🎤 [VOICE DEBUG] Total XP awarded: ${totalXPAwarded}`);
+            console.log(`🎤 [VOICE DEBUG] Invalid sessions removed: ${totalSessionsRemoved}`);
+            
         } catch (error) {
-            console.error('Error processing voice XP:', error);
+            console.error('🎤 [VOICE DEBUG] ❌ Critical error in voice XP processing:', error);
+        } finally {
+            this.isProcessingVoice = false;
         }
     }
 
     /**
-     * Process voice XP for individual user with guild settings - FIXED VERSION
+     * Process voice XP for individual user - COMPLETELY REWRITTEN WITH BETTER VALIDATION
      */
     async processUserVoiceXP(session, guild) {
         try {
@@ -415,89 +438,82 @@ class XPManager {
             const minMembers = parseInt(process.env.VOICE_MIN_MEMBERS) || 2;
             const antiAFK = process.env.VOICE_ANTI_AFK === 'true';
             
-            console.log(`🎤 [VOICE DEBUG] Processing XP for user ${session.user_id} in channel ${session.channel_id}`);
+            console.log(`🎤 [VOICE USER] Processing user ${session.user_id} in channel ${session.channel_id}`);
             
-            // Check cooldown - FIXED: Allow immediate processing for newly synced sessions
+            // Validate session timing
             const lastXPTime = new Date(session.last_xp_time).getTime();
             const timeSinceLastXP = now - lastXPTime;
-            const joinTime = new Date(session.join_time).getTime();
-            const timeSinceJoin = now - joinTime;
             
-            console.log(`🎤 [VOICE DEBUG] Time since last XP: ${Math.round(timeSinceLastXP/1000)}s (cooldown: ${cooldownMs/1000}s)`);
-            console.log(`🎤 [VOICE DEBUG] Time since join: ${Math.round(timeSinceJoin/1000)}s`);
+            console.log(`🎤 [VOICE USER] Time since last XP: ${Math.round(timeSinceLastXP/1000)}s (required: ${cooldownMs/1000}s)`);
             
-            // For synced sessions, allow processing if they've been in channel for at least the cooldown period
-            // OR if enough time has passed since last XP award
-            const canProcessXP = (timeSinceLastXP >= cooldownMs) || 
-                                 (timeSinceJoin >= cooldownMs && lastXPTime === joinTime);
-            
-            if (!canProcessXP) {
-                console.log(`🎤 [VOICE DEBUG] User ${session.user_id} not ready for XP yet`);
-                return { xpAwarded: 0, reason: 'cooldown' };
+            if (timeSinceLastXP < cooldownMs) {
+                return { xpAwarded: 0, reason: 'cooldown_not_met' };
             }
 
-            // Get channel and check if it still exists
+            // Validate channel still exists and get current members
             const channel = guild.channels.cache.get(session.channel_id);
-            if (!channel) {
-                console.log(`🎤 [VOICE DEBUG] Channel ${session.channel_id} no longer exists, removing session`);
+            if (!channel || channel.type !== 2) {
+                console.log(`🎤 [VOICE USER] Channel ${session.channel_id} no longer exists or not voice channel, removing session`);
                 await this.dbManager.removeVoiceSession(session.user_id, session.guild_id);
-                return { xpAwarded: 0, reason: 'channel_not_found' };
+                return { xpAwarded: 0, reason: 'session_removed' };
             }
 
-            // Check member count in channel (IGNORE BOTS)
-            const humanMembers = channel.members.filter(m => !m.user.bot);
-            const memberCount = humanMembers.size;
-            console.log(`🎤 [VOICE DEBUG] Channel ${channel.name} has ${memberCount} human members (${channel.members.size} total including bots, minimum required: ${minMembers})`);
-            
-            if (memberCount < minMembers) {
-                console.log(`🎤 [VOICE DEBUG] Not enough human members in channel for XP`);
-                return { xpAwarded: 0, reason: 'insufficient_members' };
-            }
-
-            // Get member
+            // Get member and validate they exist and are not a bot
             const member = await guild.members.fetch(session.user_id).catch(() => null);
             if (!member) {
-                console.log(`🎤 [VOICE DEBUG] Member ${session.user_id} not found, removing session`);
+                console.log(`🎤 [VOICE USER] Member ${session.user_id} no longer in guild, removing session`);
                 await this.dbManager.removeVoiceSession(session.user_id, session.guild_id);
-                return { xpAwarded: 0, reason: 'member_not_found' };
+                return { xpAwarded: 0, reason: 'session_removed' };
             }
 
-            // DOUBLE CHECK: Ignore bots (safety check)
+            // CRITICAL: Double-check not a bot
             if (member.user.bot) {
-                console.log(`🎤 [VOICE DEBUG] Removing bot from voice sessions: ${member.user.username}`);
+                console.log(`🎤 [VOICE USER] ⚠️ Found bot in voice sessions, removing: ${member.user.username}`);
                 await this.dbManager.removeVoiceSession(session.user_id, session.guild_id);
-                return { xpAwarded: 0, reason: 'bot_removed' };
+                return { xpAwarded: 0, reason: 'session_removed' };
             }
 
-            // Check if member is actually in the voice channel
+            // Validate member is actually in the expected voice channel
             const memberVoiceState = member.voice;
-            if (!memberVoiceState.channelId || memberVoiceState.channelId !== session.channel_id) {
-                console.log(`🎤 [VOICE DEBUG] Member ${member.user.username} not in expected voice channel, removing session`);
+            if (!memberVoiceState.channelId) {
+                console.log(`🎤 [VOICE USER] Member ${member.user.username} not in any voice channel, removing session`);
                 await this.dbManager.removeVoiceSession(session.user_id, session.guild_id);
-                return { xpAwarded: 0, reason: 'not_in_channel' };
+                return { xpAwarded: 0, reason: 'session_removed' };
+            }
+
+            if (memberVoiceState.channelId !== session.channel_id) {
+                console.log(`🎤 [VOICE USER] Member ${member.user.username} in different channel (${memberVoiceState.channelId} vs ${session.channel_id}), removing session`);
+                await this.dbManager.removeVoiceSession(session.user_id, session.guild_id);
+                return { xpAwarded: 0, reason: 'session_removed' };
+            }
+
+            // Count human members in channel (exclude bots)
+            const humanMembers = channel.members.filter(m => !m.user.bot);
+            const memberCount = humanMembers.size;
+            console.log(`🎤 [VOICE USER] Channel ${channel.name}: ${memberCount} human members (${channel.members.size} total with bots)`);
+            
+            if (memberCount < minMembers) {
+                console.log(`🎤 [VOICE USER] Not enough human members (${memberCount}/${minMembers}), no XP awarded`);
+                return { xpAwarded: 0, reason: 'insufficient_human_members' };
             }
 
             // Check daily cap
             const canGainXP = await this.dailyCapManager.canGainXP(session.user_id, session.guild_id, member);
-            console.log(`🎤 [VOICE DEBUG] Can gain XP: ${canGainXP.allowed} (${canGainXP.currentXP}/${canGainXP.dailyCap})`);
-            
             if (!canGainXP.allowed) {
-                console.log(`🎤 [VOICE DEBUG] User ${member.user.username} has reached daily cap`);
+                console.log(`🎤 [VOICE USER] ${member.user.username} has reached daily XP cap (${canGainXP.currentXP}/${canGainXP.dailyCap})`);
                 return { xpAwarded: 0, reason: 'daily_cap_reached' };
             }
 
-            // Get guild settings for voice XP values
+            // Calculate XP with all modifiers
             const guildSettings = await this.dbManager.getGuildSettings(session.guild_id);
-
-            // Calculate base XP using guild settings or environment defaults
             const minXP = guildSettings?.voice_xp_min || parseInt(process.env.VOICE_XP_MIN) || 250;
             const maxXP = guildSettings?.voice_xp_max || parseInt(process.env.VOICE_XP_MAX) || 350;
             let baseXP = Math.floor(Math.random() * (maxXP - minXP + 1)) + minXP;
 
-            console.log(`🎤 [VOICE DEBUG] Base XP calculated: ${baseXP} (Guild settings: ${minXP}-${maxXP})`);
+            console.log(`🎤 [VOICE USER] Base XP calculated: ${baseXP} (range: ${minXP}-${maxXP})`);
 
-            // Apply AFK penalty if enabled
-            if (antiAFK && (session.is_muted || session.is_deafened)) {
+            // Apply AFK penalty if enabled and user is muted/deafened
+            if (antiAFK && (memberVoiceState.mute || memberVoiceState.selfMute || memberVoiceState.deaf || memberVoiceState.selfDeaf)) {
                 const exemptUsers = (process.env.VOICE_MUTE_EXEMPT_USERS || '').split(',').filter(id => id.trim());
                 const exemptRoles = (process.env.VOICE_MUTE_EXEMPT_ROLES || '').split(',').filter(id => id.trim());
                 const exemptMultiplier = parseFloat(process.env.VOICE_MUTE_EXEMPT_MULTIPLIER) || 1.0;
@@ -508,7 +524,7 @@ class XPManager {
                 if (exemptUsers.includes(session.user_id)) {
                     isExempt = true;
                     baseXP = Math.round(baseXP * exemptMultiplier);
-                    console.log(`🎤 [VOICE DEBUG] User exempt from AFK penalty, XP: ${baseXP}`);
+                    console.log(`🎤 [VOICE USER] User exempt from AFK penalty, XP: ${baseXP}`);
                 }
                 
                 // Check role exemption
@@ -517,7 +533,7 @@ class XPManager {
                         if (member.roles.cache.has(roleId.trim())) {
                             isExempt = true;
                             baseXP = Math.round(baseXP * exemptMultiplier);
-                            console.log(`🎤 [VOICE DEBUG] Role exempt from AFK penalty, XP: ${baseXP}`);
+                            console.log(`🎤 [VOICE USER] Role exempt from AFK penalty, XP: ${baseXP}`);
                             break;
                         }
                     }
@@ -526,32 +542,33 @@ class XPManager {
                 // Apply penalty if not exempt
                 if (!isExempt) {
                     baseXP = Math.round(baseXP * 0.25); // 25% XP when muted/deafened
-                    console.log(`🎤 [VOICE DEBUG] AFK penalty applied, XP reduced to: ${baseXP}`);
+                    console.log(`🎤 [VOICE USER] AFK penalty applied (muted/deafened), XP reduced to: ${baseXP}`);
                 }
             }
 
-            // Apply tier multiplier
+            // Apply multipliers
             const tierMultiplier = await this.getTierMultiplier(member);
-            
-            // Apply guild XP multiplier
             const guildMultiplier = guildSettings?.xp_multiplier || 1.0;
-            
             const finalXP = Math.round(baseXP * tierMultiplier * guildMultiplier);
 
-            console.log(`🎤 [VOICE DEBUG] Final XP to award: ${finalXP} (tier: ${tierMultiplier}x, guild: ${guildMultiplier}x)`);
+            console.log(`🎤 [VOICE USER] Final XP: ${finalXP} (tier: ${tierMultiplier}x, guild: ${guildMultiplier}x)`);
 
             // Award XP
             await this.awardXP(session.user_id, session.guild_id, finalXP, 'voice', member.user, member);
-            
-            console.log(`🎤 [VOICE DEBUG] ✅ XP awarded to ${member.user.username}: ${finalXP}`);
 
-            // Update last XP time
-            await this.dbManager.updateVoiceSession(session.user_id, session.guild_id, session.is_muted, session.is_deafened);
+            // Update session last XP time (this updates both is_muted and is_deafened from current voice state)
+            await this.dbManager.updateVoiceSession(
+                session.user_id, 
+                session.guild_id, 
+                memberVoiceState.mute || memberVoiceState.selfMute || false,
+                memberVoiceState.deaf || memberVoiceState.selfDeaf || false
+            );
 
+            console.log(`🎤 [VOICE USER] ✅ Successfully awarded ${finalXP} XP to ${member.user.username}`);
             return { xpAwarded: finalXP, reason: 'success' };
 
         } catch (error) {
-            console.error(`Error processing user voice XP for ${session.user_id}:`, error);
+            console.error(`🎤 [VOICE USER] ❌ Error processing voice XP for ${session.user_id}:`, error);
             return { xpAwarded: 0, reason: 'error' };
         }
     }
@@ -652,15 +669,22 @@ class XPManager {
     }
 
     /**
-     * Start voice XP processing interval - UPDATED VERSION
+     * Start voice XP processing interval - IMPROVED VERSION
      */
     startVoiceXPProcessing() {
         const interval = parseInt(process.env.VOICE_PROCESSING_INTERVAL) || 300000; // 5 minutes
         
         console.log(`🎤 Starting voice XP processing with ${interval / 1000}s intervals`);
         
-        setInterval(() => {
-            console.log(`🎤 [VOICE DEBUG] Voice XP processing interval triggered`);
+        // Process immediately after a short delay to handle synced sessions
+        setTimeout(() => {
+            console.log(`🎤 [VOICE DEBUG] Initial voice XP processing (startup)`);
+            this.processVoiceXP().catch(console.error);
+        }, 15000); // 15 seconds after startup
+        
+        // Set up regular interval
+        this.voiceProcessingInterval = setInterval(() => {
+            console.log(`🎤 [VOICE DEBUG] Regular voice XP processing interval triggered`);
             this.processVoiceXP().catch(console.error);
         }, interval);
 
@@ -772,7 +796,7 @@ class XPManager {
     }
 
     /**
-     * Cleanup orphaned voice sessions on startup
+     * Cleanup orphaned voice sessions on startup - IMPROVED VERSION
      */
     async cleanupOrphanedVoiceSessions() {
         try {
@@ -787,11 +811,137 @@ class XPManager {
     }
 
     /**
-     * Cleanup
+     * Force process voice XP for all sessions (manual trigger)
+     */
+    async forceProcessVoiceXP() {
+        console.log('🎤 [MANUAL] Force processing voice XP...');
+        await this.processVoiceXP();
+        console.log('🎤 [MANUAL] Force voice XP processing complete');
+    }
+
+    /**
+     * Get voice session statistics
+     */
+    async getVoiceSessionStats() {
+        try {
+            const stats = {
+                totalSessions: 0,
+                sessionsByGuild: new Map(),
+                sessionsByChannel: new Map(),
+                humanSessions: 0,
+                botSessions: 0
+            };
+
+            for (const [guildId, guild] of this.client.guilds.cache) {
+                const sessions = await this.dbManager.getVoiceSessions(guildId);
+                stats.totalSessions += sessions.length;
+                stats.sessionsByGuild.set(guild.name, sessions.length);
+
+                for (const session of sessions) {
+                    const member = await guild.members.fetch(session.user_id).catch(() => null);
+                    if (member) {
+                        if (member.user.bot) {
+                            stats.botSessions++;
+                        } else {
+                            stats.humanSessions++;
+                        }
+
+                        const channel = guild.channels.cache.get(session.channel_id);
+                        if (channel) {
+                            const key = `${guild.name}/#${channel.name}`;
+                            stats.sessionsByChannel.set(key, (stats.sessionsByChannel.get(key) || 0) + 1);
+                        }
+                    }
+                }
+            }
+
+            return stats;
+        } catch (error) {
+            console.error('Error getting voice session stats:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Debug: List all current voice sessions
+     */
+    async debugListVoiceSessions() {
+        console.log('🔍 [DEBUG] ================ CURRENT VOICE SESSIONS ================');
+        
+        for (const [guildId, guild] of this.client.guilds.cache) {
+            const sessions = await this.dbManager.getVoiceSessions(guildId);
+            console.log(`🔍 [DEBUG] Guild ${guild.name} (${guildId}): ${sessions.length} sessions`);
+            
+            for (const session of sessions) {
+                const member = await guild.members.fetch(session.user_id).catch(() => null);
+                const channel = guild.channels.cache.get(session.channel_id);
+                
+                console.log(`🔍 [DEBUG]   User: ${member?.user.username || 'Unknown'} (${session.user_id})`);
+                console.log(`🔍 [DEBUG]   Channel: ${channel?.name || 'Unknown'} (${session.channel_id})`);
+                console.log(`🔍 [DEBUG]   Join Time: ${session.join_time}`);
+                console.log(`🔍 [DEBUG]   Last XP: ${session.last_xp_time}`);
+                console.log(`🔍 [DEBUG]   Muted: ${session.is_muted}, Deafened: ${session.is_deafened}`);
+                console.log(`🔍 [DEBUG]   Is Bot: ${member?.user.bot || 'Unknown'}`);
+                console.log(`🔍 [DEBUG]   In Channel: ${member?.voice.channelId === session.channel_id}`);
+                console.log(`🔍 [DEBUG]   ---`);
+            }
+        }
+        
+        console.log('🔍 [DEBUG] ================ END VOICE SESSIONS ================');
+    }
+
+    /**
+     * Debug: List all users currently in voice channels
+     */
+    async debugListVoiceUsers() {
+        console.log('🔍 [DEBUG] ================ USERS IN VOICE CHANNELS ================');
+        
+        for (const [guildId, guild] of this.client.guilds.cache) {
+            console.log(`🔍 [DEBUG] Guild ${guild.name} (${guildId}):`);
+            
+            const voiceChannels = guild.channels.cache.filter(channel => 
+                channel.type === 2 && channel.members && channel.members.size > 0
+            );
+            
+            if (voiceChannels.size === 0) {
+                console.log(`🔍 [DEBUG]   No active voice channels`);
+                continue;
+            }
+            
+            for (const [channelId, channel] of voiceChannels) {
+                console.log(`🔍 [DEBUG]   Channel: ${channel.name} (${channelId}) - ${channel.members.size} members`);
+                
+                for (const [userId, member] of channel.members) {
+                    console.log(`🔍 [DEBUG]     ${member.user.username} (${userId}) - Bot: ${member.user.bot}`);
+                    console.log(`🔍 [DEBUG]       Voice State: muted=${member.voice.mute || member.voice.selfMute}, deafened=${member.voice.deaf || member.voice.selfDeaf}`);
+                }
+            }
+        }
+        
+        console.log('🔍 [DEBUG] ================ END VOICE USERS ================');
+    }
+
+    /**
+     * Cleanup - IMPROVED VERSION
      */
     async cleanup() {
         try {
             console.log('🧹 Cleaning up XP Manager...');
+            
+            // Clear voice processing interval
+            if (this.voiceProcessingInterval) {
+                clearInterval(this.voiceProcessingInterval);
+                this.voiceProcessingInterval = null;
+                console.log('🧹 Cleared voice processing interval');
+            }
+            
+            // Wait for any ongoing voice processing to complete
+            let attempts = 0;
+            while (this.isProcessingVoice && attempts < 10) {
+                console.log('🧹 Waiting for voice processing to complete...');
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                attempts++;
+            }
             
             if (this.dailyCapManager) {
                 await this.dailyCapManager.cleanup();
