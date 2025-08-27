@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # Redis Cache Service
+  redis:
+    image: redis:7-alpine
+    container_name: leveling-bot-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - bot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Leveling Bot Service
+  bot:
+    build: .
+    container_name: leveling-bot
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # Bot Configuration
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - CLIENT_ID=${CLIENT_ID}
+      - DATABASE_URL=${DATABASE_URL}
+      - NODE_ENV=production
+      
+      # Admin Configuration
+      - ADMIN_USER_ID=${ADMIN_USER_ID}
+      
+      # Redis Configuration (automatically connected)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      
+      # XP Settings
+      - MESSAGE_XP_MIN=${MESSAGE_XP_MIN:-75}
+      - MESSAGE_XP_MAX=${MESSAGE_XP_MAX:-100}
+      - VOICE_XP_MIN=${VOICE_XP_MIN:-250}
+      - VOICE_XP_MAX=${VOICE_XP_MAX:-350}
+      - DAILY_XP_CAP=${DAILY_XP_CAP:-15000}
+      
+      # All other environment variables from .env
+    env_file:
+      - .env
+    networks:
+      - bot-network
+    volumes:
+      - ./assets:/app/assets:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Bot health check')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# Networks
+networks:
+  bot-network:
+    driver: bridge
+
+# Volumes for persistent data
+volumes:
+  redis_data:
+    driver: local
