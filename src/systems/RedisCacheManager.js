@@ -1,11 +1,12 @@
 /**
  * RedisCacheManager - High-level caching interface for Leveling-Bot
- * Handles all caching operations with automatic fallback to ConnectionManager
+ * FIXED: Proper Redis key prefixing and cache integration
  */
 class RedisCacheManager {
     constructor(redis = null, connectionManager = null) {
         this.redis = redis;
         this.connectionManager = connectionManager;
+        this.keyPrefix = 'Leveling-Bot:';
     }
 
     /**
@@ -27,15 +28,22 @@ class RedisCacheManager {
      */
     async cacheUserAvatar(userId, avatarHash, avatarBuffer) {
         try {
-            const key = `avatar:${userId}:${avatarHash}`;
+            const key = `${this.keyPrefix}avatar:${userId}:${avatarHash}`;
             const ttl = 43200; // 12 hours in seconds
             
-            if (this.connectionManager) {
-                return await this.connectionManager.setBinaryCache(key, avatarBuffer, ttl);
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                const result = await this.connectionManager.setBinaryCache(key, avatarBuffer, ttl);
+                console.log(`[CACHE] ✅ Cached avatar for user ${userId} (${Math.round(avatarBuffer.length/1024)}KB)`);
+                return result;
+            } else if (this.redis) {
+                // Direct Redis fallback
+                await this.redis.setex(key, ttl, avatarBuffer);
+                console.log(`[CACHE] ✅ Direct Redis: Cached avatar for user ${userId}`);
+                return true;
             }
             
-            console.log(`[CACHE] Cached avatar for user ${userId} (${avatarHash})`);
-            return true;
+            console.log(`[CACHE] ❌ No cache available for avatar ${userId}`);
+            return false;
         } catch (error) {
             console.error('[CACHE] Error caching avatar:', error);
             return false;
@@ -47,17 +55,24 @@ class RedisCacheManager {
      */
     async getCachedAvatar(userId, avatarHash) {
         try {
-            const key = `avatar:${userId}:${avatarHash}`;
+            const key = `${this.keyPrefix}avatar:${userId}:${avatarHash}`;
             
-            if (this.connectionManager) {
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const buffer = await this.connectionManager.getBinaryCache(key);
                 if (buffer) {
-                    console.log(`[CACHE] Avatar cache hit for user ${userId}`);
+                    console.log(`[CACHE] ✅ Avatar cache HIT for user ${userId}`);
+                    return buffer;
+                }
+            } else if (this.redis) {
+                // Direct Redis fallback
+                const buffer = await this.redis.getBuffer(key);
+                if (buffer) {
+                    console.log(`[CACHE] ✅ Direct Redis: Avatar cache HIT for user ${userId}`);
                     return buffer;
                 }
             }
             
-            console.log(`[CACHE] Avatar cache miss for user ${userId}`);
+            console.log(`[CACHE] ❌ Avatar cache MISS for user ${userId}`);
             return null;
         } catch (error) {
             console.error('[CACHE] Error getting cached avatar:', error);
@@ -72,15 +87,20 @@ class RedisCacheManager {
      */
     async cacheWantedPoster(userId, level, bounty, canvasBuffer) {
         try {
-            const key = `poster:${userId}:${level}:${bounty}`;
+            const key = `${this.keyPrefix}poster:${userId}:${level}:${bounty}`;
             const ttl = 86400; // 24 hours
             
-            if (this.connectionManager) {
-                return await this.connectionManager.setBinaryCache(key, canvasBuffer, ttl);
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                const result = await this.connectionManager.setBinaryCache(key, canvasBuffer, ttl);
+                console.log(`[CACHE] ✅ Cached wanted poster for user ${userId} (Level ${level}, ${Math.round(canvasBuffer.length/1024)}KB)`);
+                return result;
+            } else if (this.redis) {
+                await this.redis.setex(key, ttl, canvasBuffer);
+                console.log(`[CACHE] ✅ Direct Redis: Cached wanted poster for user ${userId}`);
+                return true;
             }
             
-            console.log(`[CACHE] Cached wanted poster for user ${userId} (Level ${level})`);
-            return true;
+            return false;
         } catch (error) {
             console.error('[CACHE] Error caching poster:', error);
             return false;
@@ -92,17 +112,23 @@ class RedisCacheManager {
      */
     async getCachedPoster(userId, level, bounty) {
         try {
-            const key = `poster:${userId}:${level}:${bounty}`;
+            const key = `${this.keyPrefix}poster:${userId}:${level}:${bounty}`;
             
-            if (this.connectionManager) {
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const buffer = await this.connectionManager.getBinaryCache(key);
                 if (buffer) {
-                    console.log(`[CACHE] Poster cache hit for user ${userId} (Level ${level})`);
+                    console.log(`[CACHE] ✅ Poster cache HIT for user ${userId} (Level ${level})`);
+                    return buffer;
+                }
+            } else if (this.redis) {
+                const buffer = await this.redis.getBuffer(key);
+                if (buffer) {
+                    console.log(`[CACHE] ✅ Direct Redis: Poster cache HIT for user ${userId}`);
                     return buffer;
                 }
             }
             
-            console.log(`[CACHE] Poster cache miss for user ${userId} (Level ${level})`);
+            console.log(`[CACHE] ❌ Poster cache MISS for user ${userId} (Level ${level})`);
             return null;
         } catch (error) {
             console.error('[CACHE] Error getting cached poster:', error);
@@ -115,231 +141,24 @@ class RedisCacheManager {
      */
     async invalidateUserPosters(userId) {
         try {
-            const pattern = `poster:${userId}:*`;
+            const pattern = `${this.keyPrefix}poster:${userId}:*`;
             
-            if (this.connectionManager) {
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const cleared = await this.connectionManager.clearPattern(pattern);
-                console.log(`[CACHE] Invalidated ${cleared} posters for user ${userId}`);
+                console.log(`[CACHE] ✅ Invalidated ${cleared} posters for user ${userId}`);
                 return cleared > 0;
+            } else if (this.redis) {
+                const keys = await this.redis.keys(pattern);
+                if (keys.length > 0) {
+                    await this.redis.del(...keys);
+                    console.log(`[CACHE] ✅ Direct Redis: Invalidated ${keys.length} posters for user ${userId}`);
+                }
+                return keys.length > 0;
             }
             
-            return true;
+            return false;
         } catch (error) {
             console.error('[CACHE] Error invalidating posters:', error);
-            return false;
-        }
-    }
-
-    // ==================== USER STATS CACHING ====================
-    
-    /**
-     * Cache user stats (5 minute TTL, invalidate on XP changes)
-     */
-    async cacheUserStats(userId, guildId, stats) {
-        try {
-            const key = `stats:${guildId}:${userId}`;
-            const ttl = 300; // 5 minutes
-            
-            if (this.connectionManager) {
-                return await this.connectionManager.setCache(key, stats, ttl);
-            }
-            
-            console.log(`[CACHE] Cached stats for user ${userId} in guild ${guildId}`);
-            return true;
-        } catch (error) {
-            console.error('[CACHE] Error caching user stats:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Get cached user stats
-     */
-    async getCachedUserStats(userId, guildId) {
-        try {
-            const key = `stats:${guildId}:${userId}`;
-            
-            if (this.connectionManager) {
-                const data = await this.connectionManager.getCache(key);
-                if (data) {
-                    console.log(`[CACHE] Stats cache hit for user ${userId}`);
-                    return data;
-                }
-            }
-            
-            console.log(`[CACHE] Stats cache miss for user ${userId}`);
-            return null;
-        } catch (error) {
-            console.error('[CACHE] Error getting cached stats:', error);
-            return null;
-        }
-    }
-
-    /**
-     * Invalidate user stats cache (on XP changes)
-     */
-    async invalidateUserStats(userId, guildId) {
-        try {
-            const key = `stats:${guildId}:${userId}`;
-            
-            if (this.connectionManager) {
-                await this.connectionManager.deleteCache(key);
-            }
-            
-            console.log(`[CACHE] Invalidated stats for user ${userId}`);
-            return true;
-        } catch (error) {
-            console.error('[CACHE] Error invalidating stats:', error);
-            return false;
-        }
-    }
-
-    // ==================== DAILY CAP PROGRESS CACHING ====================
-    
-    /**
-     * Cache daily progress with tier awareness
-     */
-    async cacheDailyProgress(userId, guildId, date, tierRoleId, progress) {
-        try {
-            const key = `daily:${guildId}:${userId}:${date}:${tierRoleId || 'none'}`;
-            const ttl = this.getSecondsUntilDailyReset();
-            
-            if (this.connectionManager) {
-                return await this.connectionManager.setCache(key, progress, ttl);
-            }
-            
-            console.log(`[CACHE] Cached daily progress for user ${userId} (Tier: ${tierRoleId || 'none'})`);
-            return true;
-        } catch (error) {
-            console.error('[CACHE] Error caching daily progress:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Get cached daily progress
-     */
-    async getCachedDailyProgress(userId, guildId, date, tierRoleId) {
-        try {
-            const key = `daily:${guildId}:${userId}:${date}:${tierRoleId || 'none'}`;
-            
-            if (this.connectionManager) {
-                const data = await this.connectionManager.getCache(key);
-                if (data) {
-                    console.log(`[CACHE] Daily progress cache hit for user ${userId}`);
-                    return data;
-                }
-            }
-            
-            console.log(`[CACHE] Daily progress cache miss for user ${userId}`);
-            return null;
-        } catch (error) {
-            console.error('[CACHE] Error getting cached daily progress:', error);
-            return null;
-        }
-    }
-
-    /**
-     * Invalidate daily progress when tier role changes
-     */
-    async invalidateUserDailyProgress(userId, guildId, date) {
-        try {
-            const pattern = `daily:${guildId}:${userId}:${date}:*`;
-            
-            if (this.connectionManager) {
-                const cleared = await this.connectionManager.clearPattern(pattern);
-                console.log(`[CACHE] Invalidated daily progress for user ${userId} (tier role change)`);
-                return cleared > 0;
-            }
-            
-            return true;
-        } catch (error) {
-            console.error('[CACHE] Error invalidating daily progress:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Clear all daily progress caches (daily reset)
-     */
-    async clearAllDailyProgress(guildId, date) {
-        try {
-            const pattern = `daily:${guildId}:*:${date}:*`;
-            
-            if (this.connectionManager) {
-                const cleared = await this.connectionManager.clearPattern(pattern);
-                console.log(`[CACHE] Cleared ${cleared} daily progress caches for daily reset`);
-                return cleared;
-            }
-            
-            return 0;
-        } catch (error) {
-            console.error('[CACHE] Error clearing daily progress:', error);
-            return 0;
-        }
-    }
-
-    // ==================== LEADERBOARD CACHING ====================
-    
-    /**
-     * Cache leaderboard (10 minute TTL)
-     */
-    async cacheLeaderboard(guildId, type, limit, leaderboardData) {
-        try {
-            const key = `leaderboard:${guildId}:${type}:${limit}`;
-            const ttl = 600; // 10 minutes
-            
-            if (this.connectionManager) {
-                return await this.connectionManager.setCache(key, leaderboardData, ttl);
-            }
-            
-            console.log(`[CACHE] Cached leaderboard for guild ${guildId} (${type}, limit: ${limit})`);
-            return true;
-        } catch (error) {
-            console.error('[CACHE] Error caching leaderboard:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Get cached leaderboard
-     */
-    async getCachedLeaderboard(guildId, type, limit) {
-        try {
-            const key = `leaderboard:${guildId}:${type}:${limit}`;
-            
-            if (this.connectionManager) {
-                const data = await this.connectionManager.getCache(key);
-                if (data) {
-                    console.log(`[CACHE] Leaderboard cache hit for guild ${guildId}`);
-                    return data;
-                }
-            }
-            
-            console.log(`[CACHE] Leaderboard cache miss for guild ${guildId}`);
-            return null;
-        } catch (error) {
-            console.error('[CACHE] Error getting cached leaderboard:', error);
-            return null;
-        }
-    }
-
-    /**
-     * Invalidate leaderboards when someone levels up
-     */
-    async invalidateGuildLeaderboards(guildId) {
-        try {
-            const pattern = `leaderboard:${guildId}:*`;
-            
-            if (this.connectionManager) {
-                const cleared = await this.connectionManager.clearPattern(pattern);
-                console.log(`[CACHE] Invalidated ${cleared} leaderboards for guild ${guildId}`);
-                return cleared > 0;
-            }
-            
-            return true;
-        } catch (error) {
-            console.error('[CACHE] Error invalidating leaderboards:', error);
             return false;
         }
     }
@@ -351,14 +170,17 @@ class RedisCacheManager {
      */
     async setXPCooldown(userId, guildId, source, cooldownMs) {
         try {
-            const key = `cooldown:${guildId}:${userId}:${source}`;
+            const key = `${this.keyPrefix}cooldown:${guildId}:${userId}:${source}`;
             const ttl = Math.ceil(cooldownMs / 1000); // Convert to seconds
             
-            if (this.connectionManager) {
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 return await this.connectionManager.setCache(key, Date.now().toString(), ttl);
+            } else if (this.redis) {
+                await this.redis.setex(key, ttl, Date.now().toString());
+                return true;
             }
             
-            return true;
+            return false;
         } catch (error) {
             console.error('[CACHE] Error setting XP cooldown:', error);
             return false;
@@ -370,11 +192,14 @@ class RedisCacheManager {
      */
     async isOnXPCooldown(userId, guildId, source) {
         try {
-            const key = `cooldown:${guildId}:${userId}:${source}`;
+            const key = `${this.keyPrefix}cooldown:${guildId}:${userId}:${source}`;
             
-            if (this.connectionManager) {
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const exists = await this.connectionManager.getCache(key);
                 return exists !== null;
+            } else if (this.redis) {
+                const exists = await this.redis.exists(key);
+                return exists === 1;
             }
             
             return false;
@@ -386,25 +211,6 @@ class RedisCacheManager {
 
     // ==================== UTILITY METHODS ====================
     
-    /**
-     * Calculate seconds until daily reset (for TTL)
-     */
-    getSecondsUntilDailyReset() {
-        const now = new Date();
-        const resetHour = parseInt(process.env.DAILY_RESET_HOUR_EDT) || 19;
-        const resetMinute = parseInt(process.env.DAILY_RESET_MINUTE_EDT) || 35;
-        
-        // Simple calculation - can be enhanced with proper timezone handling
-        const nextReset = new Date();
-        nextReset.setHours(resetHour, resetMinute, 0, 0);
-        
-        if (nextReset.getTime() <= now.getTime()) {
-            nextReset.setDate(nextReset.getDate() + 1);
-        }
-        
-        return Math.ceil((nextReset.getTime() - now.getTime()) / 1000);
-    }
-
     /**
      * Get current date string for cache keys
      */
@@ -426,22 +232,26 @@ class RedisCacheManager {
             }
 
             const redis = this.connectionManager.getRedis();
-            const info = await redis.info('memory');
             
-            // Count keys by type using Lua script for efficiency
+            // Count keys by type using SCAN for better performance
             const stats = {
-                avatars: await redis.eval(`return #redis.call('keys', KEYS[1])`, 1, 'Leveling-Bot:avatar:*'),
-                posters: await redis.eval(`return #redis.call('keys', KEYS[1])`, 1, 'Leveling-Bot:poster:*'),
-                stats: await redis.eval(`return #redis.call('keys', KEYS[1])`, 1, 'Leveling-Bot:stats:*'),
-                daily: await redis.eval(`return #redis.call('keys', KEYS[1])`, 1, 'Leveling-Bot:daily:*'),
-                leaderboards: await redis.eval(`return #redis.call('keys', KEYS[1])`, 1, 'Leveling-Bot:leaderboard:*'),
-                cooldowns: await redis.eval(`return #redis.call('keys', KEYS[1])`, 1, 'Leveling-Bot:cooldown:*')
+                avatars: await this.countKeys(`${this.keyPrefix}avatar:*`),
+                posters: await this.countKeys(`${this.keyPrefix}poster:*`),
+                cooldowns: await this.countKeys(`${this.keyPrefix}cooldown:*`)
             };
             
             stats.total = Object.values(stats).reduce((sum, count) => sum + count, 0);
-            stats.memory = info;
             stats.mode = 'Redis';
             stats.redis = true;
+            
+            // Get Redis memory info if available
+            try {
+                const info = await redis.info('memory');
+                const usedMemory = info.match(/used_memory_human:([^\r\n]+)/)?.[1] || 'Unknown';
+                stats.memoryUsed = usedMemory;
+            } catch (error) {
+                console.log('[CACHE] Could not get Redis memory info');
+            }
             
             return stats;
         } catch (error) {
@@ -456,20 +266,17 @@ class RedisCacheManager {
     }
 
     /**
-     * Flush all Leveling-Bot cache (maintenance)
+     * Count keys matching pattern
      */
-    async flushBotCache() {
+    async countKeys(pattern) {
         try {
-            if (this.connectionManager) {
-                const pattern = 'Leveling-Bot:*';
-                const cleared = await this.connectionManager.clearPattern(pattern);
-                console.log(`[CACHE] Flushed ${cleared} Leveling-Bot cache keys`);
-                return cleared;
+            if (this.redis) {
+                const keys = await this.redis.keys(pattern);
+                return keys.length;
             }
-            
             return 0;
         } catch (error) {
-            console.error('[CACHE] Error flushing cache:', error);
+            console.error(`[CACHE] Error counting keys for pattern ${pattern}:`, error);
             return 0;
         }
     }
@@ -481,11 +288,66 @@ class RedisCacheManager {
         try {
             if (this.connectionManager) {
                 return this.connectionManager.isRedisAvailable();
+            } else if (this.redis) {
+                const result = await this.redis.ping();
+                return result === 'PONG';
             }
             return false;
         } catch (error) {
             console.error('[CACHE] Health check failed:', error);
             return false;
+        }
+    }
+
+    /**
+     * Test cache functionality
+     */
+    async testCache() {
+        try {
+            const testKey = `${this.keyPrefix}test:${Date.now()}`;
+            const testValue = 'cache-test-value';
+            
+            // Test set
+            let setResult = false;
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                setResult = await this.connectionManager.setCache(testKey, testValue, 60);
+            } else if (this.redis) {
+                await this.redis.setex(testKey, 60, testValue);
+                setResult = true;
+            }
+            
+            if (!setResult) {
+                return { success: false, error: 'Cache set failed' };
+            }
+            
+            // Test get
+            let getValue = null;
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                getValue = await this.connectionManager.getCache(testKey);
+            } else if (this.redis) {
+                getValue = await this.redis.get(testKey);
+            }
+            
+            // Clean up
+            try {
+                if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                    await this.connectionManager.deleteCache(testKey);
+                } else if (this.redis) {
+                    await this.redis.del(testKey);
+                }
+            } catch (cleanupError) {
+                console.log('[CACHE] Cleanup error (not critical):', cleanupError.message);
+            }
+            
+            if (getValue === testValue) {
+                return { success: true, message: 'Cache test passed' };
+            } else {
+                return { success: false, error: `Cache test failed: expected '${testValue}', got '${getValue}'` };
+            }
+            
+        } catch (error) {
+            console.error('[CACHE] Cache test error:', error);
+            return { success: false, error: error.message };
         }
     }
 
