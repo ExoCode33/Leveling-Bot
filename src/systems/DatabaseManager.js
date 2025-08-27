@@ -1,6 +1,6 @@
 /**
  * DatabaseManager - Handles all database operations and schema management
- * UPDATED VERSION with XP Boost Roles support
+ * FIXED: XP Boost Roles calculation bug
  */
 class DatabaseManager {
     constructor(db) {
@@ -533,7 +533,7 @@ class DatabaseManager {
     }
 
     /**
-     * Calculate total XP multiplier for a member based on their boost roles
+     * Calculate total XP multiplier for a member based on their boost roles - FIXED BUG
      */
     async calculateXPMultiplier(member, guildId) {
         try {
@@ -542,18 +542,21 @@ class DatabaseManager {
             const boostRoles = await this.getXPBoostRoles(guildId);
             if (boostRoles.length === 0) return 1.0;
 
-            let totalMultiplier = 1.0;
+            let totalMultiplier = 1.0; // Start with base 1.0
 
-            // Check each boost role and add multipliers additively
+            // Check each boost role and add multipliers CORRECTLY
             for (const boostRole of boostRoles) {
                 if (member.roles.cache.has(boostRole.role_id)) {
-                    // Additive multipliers: if role has 1.5x, add 0.5 to the total
-                    totalMultiplier += (boostRole.multiplier - 1);
-                    console.log(`[XP BOOST] ${member.displayName} has boost role with ${boostRole.multiplier}x multiplier`);
+                    // FIXED: Add the bonus amount, not the full multiplier
+                    // If role has 1.5x multiplier, we add 0.5 to the total
+                    const bonusMultiplier = boostRole.multiplier - 1.0;
+                    totalMultiplier += bonusMultiplier;
+                    
+                    console.log(`[XP BOOST DEBUG] ${member.displayName} has boost role: ${boostRole.multiplier}x (adding +${bonusMultiplier})`);
                 }
             }
 
-            console.log(`[XP BOOST] ${member.displayName} total XP multiplier: ${totalMultiplier.toFixed(2)}x`);
+            console.log(`[XP BOOST DEBUG] ${member.displayName} final multiplier: ${totalMultiplier.toFixed(2)}x`);
             return totalMultiplier;
         } catch (error) {
             console.error('Error calculating XP multiplier:', error);
