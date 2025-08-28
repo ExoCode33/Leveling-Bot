@@ -175,15 +175,20 @@ class RedisCacheManager {
             const avatarURL = user.displayAvatarURL({ extension: 'png', size: 512, forceStatic: true });
             const avatarHash = this.extractAvatarHash(avatarURL);
             
-            if (!avatarHash) return;
+            if (!avatarHash) {
+                console.log(`[PRELOAD] ⚠️ No avatar hash for ${user.username}, skipping`);
+                return;
+            }
 
             // Check if already cached
             const existing = await this.getCachedAvatar(user.id, avatarHash);
             if (existing) {
+                console.log(`[PRELOAD] 📋 Avatar already cached for ${user.username}`);
                 return; // Already cached
             }
 
             // Load and cache avatar
+            console.log(`[PRELOAD] 📥 Loading avatar for ${user.username}...`);
             const { loadImage, createCanvas } = require('canvas');
             const avatar = await loadImage(avatarURL);
             
@@ -194,11 +199,17 @@ class RedisCacheManager {
             const buffer = tempCanvas.toBuffer();
             
             // Cache the avatar
-            await this.cacheUserAvatar(user.id, avatarHash, buffer);
-            this.preloadStats.avatarsPreloaded++;
+            const cacheSuccess = await this.cacheUserAvatar(user.id, avatarHash, buffer);
+            if (cacheSuccess) {
+                this.preloadStats.avatarsPreloaded++;
+                console.log(`[PRELOAD] ✅ Successfully cached avatar for ${user.username} (${Math.round(buffer.length/1024)}KB)`);
+            } else {
+                console.log(`[PRELOAD] ❌ Failed to cache avatar for ${user.username}`);
+            }
 
         } catch (error) {
-            // Silently handle avatar loading errors during preload
+            console.error(`[PRELOAD] ❌ Error preloading avatar for ${user.username}:`, error);
+            this.preloadStats.errors++;
         }
     }
 
@@ -214,8 +225,11 @@ class RedisCacheManager {
             // Check if poster already cached
             const existing = await this.getCachedPoster(userData.user_id, userData.level, bounty);
             if (existing) {
+                console.log(`[PRELOAD] 📋 Poster already cached for ${member.displayName} (Level ${userData.level})`);
                 return; // Already cached
             }
+
+            console.log(`[PRELOAD] 🎨 Generating poster for ${member.displayName} (Level ${userData.level})...`);
 
             // Generate poster
             const CanvasGenerator = require('./CanvasGenerator');
@@ -232,11 +246,18 @@ class RedisCacheManager {
             const canvas = await canvasGenerator.createWantedPoster(fullUserData, guild);
             const buffer = canvas.toBuffer();
             
-            // Cache the poster (this will be done automatically by CanvasGenerator)
-            this.preloadStats.postersPreloaded++;
+            // Cache the poster - this will be done automatically by CanvasGenerator
+            const cacheSuccess = await this.cacheWantedPoster(userData.user_id, userData.level, bounty, buffer);
+            if (cacheSuccess) {
+                this.preloadStats.postersPreloaded++;
+                console.log(`[PRELOAD] ✅ Successfully cached poster for ${member.displayName} (Level ${userData.level}, ${Math.round(buffer.length/1024)}KB)`);
+            } else {
+                console.log(`[PRELOAD] ❌ Failed to cache poster for ${member.displayName}`);
+            }
 
         } catch (error) {
-            // Silently handle poster generation errors during preload
+            console.error(`[PRELOAD] ❌ Error preloading poster for ${member.displayName}:`, error);
+            this.preloadStats.errors++;
         }
     }
 
@@ -264,10 +285,14 @@ class RedisCacheManager {
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const result = await this.connectionManager.setBinaryCache(key, avatarBuffer, ttl);
+                if (result) {
+                    console.log(`[CACHE] ✅ Cached avatar for user ${userId} (${Math.round(avatarBuffer.length/1024)}KB)`);
+                }
                 return result;
             } else if (this.redis) {
                 // Direct Redis fallback
                 await this.redis.setex(key, ttl, avatarBuffer);
+                console.log(`[CACHE] ✅ Direct Redis: Cached avatar for user ${userId}`);
                 return true;
             }
             
@@ -317,9 +342,13 @@ class RedisCacheManager {
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const result = await this.connectionManager.setBinaryCache(key, canvasBuffer, ttl);
+                if (result) {
+                    console.log(`[CACHE] ✅ Cached wanted poster for user ${userId} (Level ${level}, ${Math.round(canvasBuffer.length/1024)}KB)`);
+                }
                 return result;
             } else if (this.redis) {
                 await this.redis.setex(key, ttl, canvasBuffer);
+                console.log(`[CACHE] ✅ Direct Redis: Cached wanted poster for user ${userId}`);
                 return true;
             }
             
@@ -655,11 +684,15 @@ class RedisCacheManager {
     }
 
     /**
-     * Count keys matching pattern
+     * Count keys matching pattern - IMPROVED WITH ACTUAL REDIS SCAN
      */
     async countKeys(pattern) {
         try {
-            if (this.redis) {
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                const redis = this.connectionManager.getRedis();
+                const keys = await redis.keys(pattern);
+                return keys.length;
+            } else if (this.redis) {
                 const keys = await this.redis.keys(pattern);
                 return keys.length;
             }
