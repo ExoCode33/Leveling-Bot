@@ -1,6 +1,6 @@
 /**
  * RedisCacheManager - High-level caching interface for Leveling-Bot
- * FIXED: Redis KEYS command doesn't automatically use keyPrefix in ioredis
+ * FIXED: Cache preloading actually loads and stores data with proper verification
  */
 class RedisCacheManager {
     constructor(redis = null, connectionManager = null) {
@@ -224,7 +224,7 @@ class RedisCacheManager {
     }
 
     /**
-     * Preload user avatar - FIXED TO ACTUALLY LOAD AND CACHE
+     * FIXED: Preload user avatar - Actually loads and caches the avatar with verification
      */
     async preloadUserAvatar(user) {
         try {
@@ -235,11 +235,10 @@ class RedisCacheManager {
             
             if (!avatarHash) {
                 console.log(`[PRELOAD] ⚠️ No avatar hash for ${user.username}, using default`);
-                // Try to preload default avatar instead
                 return await this.preloadDefaultAvatar(user);
             }
 
-            // CRITICAL FIX: DON'T SKIP BASED ON CACHE - ALWAYS TRY TO LOAD
+            // REMOVED: Don't skip based on cache - always try to load and cache
             console.log(`[PRELOAD] 📥 Loading avatar for ${user.username} from ${avatarURL}`);
             
             const { loadImage, createCanvas } = require('canvas');
@@ -257,7 +256,7 @@ class RedisCacheManager {
                 tempCtx.drawImage(avatar, 0, 0, 512, 512);
                 const buffer = tempCanvas.toBuffer();
                 
-                // CRITICAL: Actually cache the avatar
+                // CRITICAL: Actually cache the avatar with verification
                 const cacheSuccess = await this.cacheUserAvatar(user.id, avatarHash, buffer);
                 
                 if (cacheSuccess) {
@@ -341,7 +340,7 @@ class RedisCacheManager {
     }
 
     /**
-     * Preload user wanted poster - FIXED TO ACTUALLY GENERATE AND CACHE
+     * FIXED: Preload user wanted poster - Actually generates and caches the poster with verification
      */
     async preloadUserPoster(userData, member, guild) {
         try {
@@ -351,7 +350,7 @@ class RedisCacheManager {
             const bountyCalculator = new BountyCalculator();
             const bounty = bountyCalculator.getBountyForLevel(userData.level);
 
-            // CRITICAL FIX: ALWAYS GENERATE THE POSTER, DON'T SKIP
+            // REMOVED: Don't skip based on cache - always generate and cache
             console.log(`[PRELOAD] 🎨 Generating poster for ${member.displayName} (Level ${userData.level}, Bounty: ฿${bounty.toLocaleString()})`);
 
             // Generate poster using CanvasGenerator
@@ -370,7 +369,7 @@ class RedisCacheManager {
                 const canvas = await canvasGenerator.createWantedPoster(fullUserData, guild);
                 const buffer = canvas.toBuffer();
                 
-                // CRITICAL: Cache the poster directly
+                // CRITICAL: Cache the poster directly with verification
                 const cacheSuccess = await this.cacheWantedPoster(userData.user_id, userData.level, bounty, buffer);
                 
                 if (cacheSuccess) {
@@ -428,29 +427,54 @@ class RedisCacheManager {
     // ==================== USER AVATAR CACHING ====================
     
     /**
-     * Cache user avatar (12 hour TTL)
+     * FIXED: Cache user avatar with proper error handling and verification
      */
     async cacheUserAvatar(userId, avatarHash, avatarBuffer) {
         try {
+            if (!avatarBuffer || !Buffer.isBuffer(avatarBuffer)) {
+                console.error(`[CACHE] Invalid avatar buffer for user ${userId}`);
+                return false;
+            }
+
             const key = `${this.keyPrefix}avatar:${userId}:${avatarHash}`;
             const ttl = 43200; // 12 hours in seconds
             
+            console.log(`[CACHE] Attempting to cache avatar: ${key} (${Math.round(avatarBuffer.length/1024)}KB)`);
+            
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const result = await this.connectionManager.setBinaryCache(key, avatarBuffer, ttl);
+                
                 if (result) {
-                    console.log(`[CACHE] ✅ Cached avatar for user ${userId} (${Math.round(avatarBuffer.length/1024)}KB)`);
+                    // VERIFICATION: Check that it was actually stored
+                    const verification = await this.connectionManager.getBinaryCache(key);
+                    if (verification && verification.length === avatarBuffer.length) {
+                        console.log(`[CACHE] ✅ Avatar cached and verified for user ${userId}`);
+                        return true;
+                    } else {
+                        console.error(`[CACHE] ❌ Avatar cache verification failed for user ${userId}`);
+                        return false;
+                    }
                 }
-                return result;
+                return false;
             } else if (this.redis) {
-                // Direct Redis fallback
+                // Direct Redis fallback with verification
                 await this.redis.setex(key, ttl, avatarBuffer);
-                console.log(`[CACHE] ✅ Direct Redis: Cached avatar for user ${userId}`);
-                return true;
+                
+                // Verify storage
+                const verification = await this.redis.getBuffer(key);
+                if (verification && verification.length === avatarBuffer.length) {
+                    console.log(`[CACHE] ✅ Direct Redis: Avatar cached and verified for user ${userId}`);
+                    return true;
+                } else {
+                    console.error(`[CACHE] ❌ Direct Redis: Avatar cache verification failed for user ${userId}`);
+                    return false;
+                }
             }
             
+            console.error(`[CACHE] ❌ No Redis connection available for user ${userId}`);
             return false;
         } catch (error) {
-            console.error('[CACHE] Error caching avatar:', error);
+            console.error(`[CACHE] ❌ Error caching avatar for user ${userId}:`, error);
             return false;
         }
     }
@@ -485,28 +509,53 @@ class RedisCacheManager {
     // ==================== WANTED POSTER CACHING ====================
     
     /**
-     * Cache generated wanted poster (24 hour TTL)
+     * FIXED: Cache generated wanted poster with proper error handling and verification
      */
     async cacheWantedPoster(userId, level, bounty, canvasBuffer) {
         try {
+            if (!canvasBuffer || !Buffer.isBuffer(canvasBuffer)) {
+                console.error(`[CACHE] Invalid poster buffer for user ${userId}`);
+                return false;
+            }
+
             const key = `${this.keyPrefix}poster:${userId}:${level}:${bounty}`;
             const ttl = 86400; // 24 hours
             
+            console.log(`[CACHE] Attempting to cache poster: ${key} (${Math.round(canvasBuffer.length/1024)}KB)`);
+            
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const result = await this.connectionManager.setBinaryCache(key, canvasBuffer, ttl);
+                
                 if (result) {
-                    console.log(`[CACHE] ✅ Cached wanted poster for user ${userId} (Level ${level}, ${Math.round(canvasBuffer.length/1024)}KB)`);
+                    // VERIFICATION: Check that it was actually stored
+                    const verification = await this.connectionManager.getBinaryCache(key);
+                    if (verification && verification.length === canvasBuffer.length) {
+                        console.log(`[CACHE] ✅ Poster cached and verified for user ${userId} (Level ${level})`);
+                        return true;
+                    } else {
+                        console.error(`[CACHE] ❌ Poster cache verification failed for user ${userId}`);
+                        return false;
+                    }
                 }
-                return result;
+                return false;
             } else if (this.redis) {
                 await this.redis.setex(key, ttl, canvasBuffer);
-                console.log(`[CACHE] ✅ Direct Redis: Cached wanted poster for user ${userId}`);
-                return true;
+                
+                // Verify storage
+                const verification = await this.redis.getBuffer(key);
+                if (verification && verification.length === canvasBuffer.length) {
+                    console.log(`[CACHE] ✅ Direct Redis: Poster cached and verified for user ${userId}`);
+                    return true;
+                } else {
+                    console.error(`[CACHE] ❌ Direct Redis: Poster cache verification failed for user ${userId}`);
+                    return false;
+                }
             }
             
+            console.error(`[CACHE] ❌ No Redis connection available for user ${userId}`);
             return false;
         } catch (error) {
-            console.error('[CACHE] Error caching poster:', error);
+            console.error(`[CACHE] ❌ Error caching poster for user ${userId}:`, error);
             return false;
         }
     }
@@ -655,20 +704,6 @@ class RedisCacheManager {
                     const cacheData = JSON.parse(data);
                     
                     // Check if cache is too old (older than 8 minutes = 480 seconds)
-                    const cacheAge = Date.now() - cacheData.cachedAt;
-                    if (cacheAge > 480000) { // 8 minutes
-                        console.log(`[CACHE] Validated users cache too old (${Math.round(cacheAge/1000)}s), ignoring`);
-                        return null;
-                    }
-                    
-                    return cacheData.users;
-                }
-            } else if (this.redis) {
-                const data = await this.redis.get(key);
-                if (data) {
-                    const cacheData = JSON.parse(data);
-                    
-                    // Check staleness
                     const cacheAge = Date.now() - cacheData.cachedAt;
                     if (cacheAge > 480000) { // 8 minutes
                         console.log(`[CACHE] Validated users cache too old (${Math.round(cacheAge/1000)}s), ignoring`);
@@ -1274,4 +1309,18 @@ class RedisCacheManager {
     }
 }
 
-module.exports = RedisCacheManager;
+module.exports = RedisCacheManager;Data.users;
+                }
+            } else if (this.redis) {
+                const data = await this.redis.get(key);
+                if (data) {
+                    const cacheData = JSON.parse(data);
+                    
+                    // Check staleness
+                    const cacheAge = Date.now() - cacheData.cachedAt;
+                    if (cacheAge > 480000) { // 8 minutes
+                        console.log(`[CACHE] Validated users cache too old (${Math.round(cacheAge/1000)}s), ignoring`);
+                        return null;
+                    }
+                    
+                    return cache
