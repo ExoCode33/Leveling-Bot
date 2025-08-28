@@ -391,7 +391,51 @@ client.on('messageCreate', async (message) => {
         await message.reply({ embeds: [embed] });
     }
 
-    // Admin cache stats command
+    // Admin cache debug command
+    if (message.content === '!cachedebug' && message.author.id === process.env.ADMIN_USER_ID) {
+        try {
+            const stats = await cacheManager.getCacheStats();
+            const redis = connectionManager.getRedis();
+            
+            // Get raw Redis key count
+            let redisKeyCount = 0;
+            let redisKeys = [];
+            if (redis) {
+                const allKeys = await redis.keys('Leveling-Bot:*');
+                redisKeyCount = allKeys.length;
+                redisKeys = allKeys.slice(0, 10); // Show first 10 keys
+            }
+            
+            const embed = {
+                color: 0x4A90E2,
+                title: '🔍 **Cache Debug Information**',
+                description: '```diff\n+ DETAILED CACHE DIAGNOSIS\n```',
+                fields: [
+                    {
+                        name: '🔴 **Redis Connection**',
+                        value: `**Available:** ${connectionManager.isRedisAvailable()}\n**Direct Keys:** ${redisKeyCount}\n**Stats Keys:** ${stats.total || 0}`,
+                        inline: true
+                    },
+                    {
+                        name: '📊 **Key Breakdown**',
+                        value: `**Avatar Pattern:** ${await cacheManager.countKeys('Leveling-Bot:avatar:*')}\n**Poster Pattern:** ${await cacheManager.countKeys('Leveling-Bot:poster:*')}\n**Cooldown Pattern:** ${await cacheManager.countKeys('Leveling-Bot:cooldown:*')}`,
+                        inline: true
+                    },
+                    {
+                        name: '🔍 **Sample Keys**',
+                        value: redisKeys.length > 0 ? redisKeys.slice(0, 5).map(key => `\`${key.replace('Leveling-Bot:', '')}\``).join('\n') : 'No keys found',
+                        inline: false
+                    }
+                ],
+                footer: { text: '⚓ Marine Intelligence Division • Cache Debug' },
+                timestamp: new Date().toISOString()
+            };
+            
+            await message.reply({ embeds: [embed] });
+        } catch (error) {
+            await message.reply(`❌ Cache debug error: ${error.message}`);
+        }
+    }
     if (message.content === '!cachestats' && message.author.id === process.env.ADMIN_USER_ID) {
         try {
             const stats = await cacheManager.getCacheStats();
