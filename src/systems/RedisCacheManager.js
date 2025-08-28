@@ -1,6 +1,6 @@
 /**
  * RedisCacheManager - High-level caching interface for Leveling-Bot
- * FIXED: Syntax error with try-catch blocks and cache preloading system
+ * FIXED: Avatar hash extraction for animated avatars and cache preloading system
  */
 class RedisCacheManager {
     constructor(redis = null, connectionManager = null) {
@@ -352,28 +352,54 @@ class RedisCacheManager {
     }
 
     /**
-     * Extract avatar hash from Discord avatar URL
+     * Extract avatar hash from Discord avatar URL - FIXED for animated avatars
      */
     extractAvatarHash(avatarURL) {
         try {
+            console.log(`[CACHE] 🔍 Extracting hash from: ${avatarURL}`);
+            
             const patterns = [
+                // Animated avatars (a_prefix) - FIXED PATTERN
+                /avatars\/(\d+)\/(a_[a-f0-9]+)\.(png|jpg|gif|webp)/i,
+                // Regular avatars
                 /avatars\/(\d+)\/([a-f0-9]+)\.(png|jpg|gif|webp)/i,
-                /\/([a-f0-9]{32})\.(png|jpg|gif|webp)/i,
+                // Fallback for any hash pattern (animated or not)
+                /\/(a_[a-f0-9]{32}|[a-f0-9]{32})\.(png|jpg|gif|webp)/i,
+                // Default avatars
                 /embed\/avatars\/(\d+)\.png/i
             ];
             
-            for (const pattern of patterns) {
+            for (let i = 0; i < patterns.length; i++) {
+                const pattern = patterns[i];
                 const match = avatarURL.match(pattern);
                 if (match) {
+                    console.log(`[CACHE] ✅ Pattern ${i + 1} matched:`, match);
+                    
                     if (pattern.source.includes('embed')) {
-                        return `default_${match[1]}`;
-                    } else {
-                        return match[2] || match[1];
+                        // Default avatar
+                        const hash = `default_${match[1]}`;
+                        console.log(`[CACHE] ✅ Extracted default avatar hash: ${hash}`);
+                        return hash;
+                    } else if (match[2] && match[2].startsWith('a_')) {
+                        // Animated avatar (a_prefix)
+                        const hash = match[2];
+                        console.log(`[CACHE] ✅ Extracted animated avatar hash: ${hash}`);
+                        return hash;
+                    } else if (match[2]) {
+                        // Regular avatar
+                        const hash = match[2];
+                        console.log(`[CACHE] ✅ Extracted regular avatar hash: ${hash}`);
+                        return hash;
+                    } else if (match[1] && (match[1].startsWith('a_') || match[1].length >= 32)) {
+                        // Fallback pattern match
+                        const hash = match[1];
+                        console.log(`[CACHE] ✅ Extracted fallback avatar hash: ${hash}`);
+                        return hash;
                     }
                 }
             }
             
-            console.log(`[CACHE] ⚠️ Could not extract avatar hash from: ${avatarURL}`);
+            console.log(`[CACHE] ❌ Could not extract avatar hash from: ${avatarURL}`);
             return null;
         } catch (error) {
             console.log(`[CACHE] ❌ Error extracting avatar hash: ${error.message}`);
