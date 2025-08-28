@@ -4,7 +4,7 @@ const BountyCalculator = require('./BountyCalculator');
 
 /**
  * CanvasGenerator - Handles all canvas/image generation for wanted posters
- * FIXED: Robust avatar loading with multiple fallback strategies
+ * FIXED: Avatar hash extraction for animated avatars and robust avatar loading
  */
 class CanvasGenerator {
     constructor(cacheManager = null) {
@@ -409,14 +409,57 @@ class CanvasGenerator {
     }
 
     /**
-     * Extract avatar hash from Discord avatar URL
+     * Extract avatar hash from Discord avatar URL - FIXED for animated avatars
      */
     extractAvatarHash(avatarURL) {
         try {
-            const match = avatarURL.match(/avatars\/\d+\/([a-f0-9]+)\.(png|jpg|gif|webp)/);
-            return match ? match[1] : null;
+            console.log(`[CANVAS] 🔍 Extracting hash from: ${avatarURL}`);
+            
+            const patterns = [
+                // Animated avatars (a_prefix) - FIXED PATTERN
+                /avatars\/(\d+)\/(a_[a-f0-9]+)\.(png|jpg|gif|webp)/i,
+                // Regular avatars
+                /avatars\/(\d+)\/([a-f0-9]+)\.(png|jpg|gif|webp)/i,
+                // Fallback for any hash pattern (animated or not)
+                /\/(a_[a-f0-9]{32}|[a-f0-9]{32})\.(png|jpg|gif|webp)/i,
+                // Default avatars
+                /embed\/avatars\/(\d+)\.png/i
+            ];
+            
+            for (let i = 0; i < patterns.length; i++) {
+                const pattern = patterns[i];
+                const match = avatarURL.match(pattern);
+                if (match) {
+                    console.log(`[CANVAS] ✅ Pattern ${i + 1} matched:`, match);
+                    
+                    if (pattern.source.includes('embed')) {
+                        // Default avatar
+                        const hash = `default_${match[1]}`;
+                        console.log(`[CANVAS] ✅ Extracted default avatar hash: ${hash}`);
+                        return hash;
+                    } else if (match[2] && match[2].startsWith('a_')) {
+                        // Animated avatar (a_prefix)
+                        const hash = match[2];
+                        console.log(`[CANVAS] ✅ Extracted animated avatar hash: ${hash}`);
+                        return hash;
+                    } else if (match[2]) {
+                        // Regular avatar
+                        const hash = match[2];
+                        console.log(`[CANVAS] ✅ Extracted regular avatar hash: ${hash}`);
+                        return hash;
+                    } else if (match[1] && (match[1].startsWith('a_') || match[1].length >= 32)) {
+                        // Fallback pattern match
+                        const hash = match[1];
+                        console.log(`[CANVAS] ✅ Extracted fallback avatar hash: ${hash}`);
+                        return hash;
+                    }
+                }
+            }
+            
+            console.log(`[CANVAS] ❌ Could not extract avatar hash from: ${avatarURL}`);
+            return null;
         } catch (error) {
-            console.log('[CANVAS] ⚠️ Could not extract avatar hash');
+            console.log(`[CANVAS] ❌ Error extracting avatar hash: ${error.message}`);
             return null;
         }
     }
