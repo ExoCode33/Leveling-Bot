@@ -380,61 +380,96 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     }
 });
 
-// Slash command handler
+// Slash command and button interaction handler - FIXED
 client.on('interactionCreate', async (interaction) => {
-    if (interaction.isChatInputCommand()) {
-        const command = client.commands.get(interaction.commandName);
-        if (!command) return;
-
-        try {
-            await command.execute(interaction, { 
-                xpManager, 
-                databaseManager, 
-                cacheManager,
-                connectionManager 
-            });
-        } catch (error) {
-            console.error(`Error executing command ${interaction.commandName}:`, error);
+    try {
+        if (interaction.isChatInputCommand()) {
+            console.log(`[INTERACTION] Processing slash command: ${interaction.commandName} by ${interaction.user.username}`);
             
-            const errorMessage = '❌ There was an error executing this command!';
-            
-            if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ content: errorMessage, ephemeral: true });
-            } else {
-                await interaction.reply({ content: errorMessage, ephemeral: true });
+            const command = client.commands.get(interaction.commandName);
+            if (!command) {
+                console.error(`[INTERACTION] Command not found: ${interaction.commandName}`);
+                return;
             }
-        }
-    } else if (interaction.isButton()) {
-        // Handle button interactions for leaderboard navigation
-        if (interaction.customId.startsWith('leaderboard_')) {
-            const type = interaction.customId.replace('leaderboard_', '');
-            const leaderboardCommand = client.commands.get('leaderboard');
-            
-            if (leaderboardCommand) {
-                // Create a mock interaction with the type option
-                const mockInteraction = {
-                    ...interaction,
-                    options: {
-                        getString: (name) => name === 'type' ? type : null
-                    }
-                };
+
+            try {
+                await command.execute(interaction, { 
+                    xpManager, 
+                    databaseManager, 
+                    cacheManager,
+                    connectionManager 
+                });
+                console.log(`[INTERACTION] ✅ Successfully executed command: ${interaction.commandName}`);
+            } catch (error) {
+                console.error(`[INTERACTION] ❌ Error executing command ${interaction.commandName}:`, error);
+                
+                const errorMessage = '❌ There was an error executing this command!';
                 
                 try {
-                    await leaderboardCommand.execute(mockInteraction, { 
-                        xpManager, 
-                        databaseManager, 
-                        cacheManager,
-                        connectionManager 
-                    });
-                } catch (error) {
-                    console.error('Error handling leaderboard button:', error);
-                    await interaction.reply({ 
-                        content: '❌ There was an error processing your request!', 
-                        ephemeral: true 
-                    });
+                    if (interaction.replied || interaction.deferred) {
+                        await interaction.followUp({ content: errorMessage, ephemeral: true });
+                    } else {
+                        await interaction.reply({ content: errorMessage, ephemeral: true });
+                    }
+                } catch (replyError) {
+                    console.error(`[INTERACTION] ❌ Failed to send error response:`, replyError);
                 }
             }
+        } else if (interaction.isButton()) {
+            console.log(`[BUTTON] Processing button interaction: ${interaction.customId} by ${interaction.user.username}`);
+            
+            // Handle button interactions for leaderboard navigation
+            if (interaction.customId.startsWith('leaderboard_')) {
+                const leaderboardCommand = client.commands.get('leaderboard');
+                
+                if (leaderboardCommand) {
+                    try {
+                        // Pass the button interaction directly - the command will handle it properly
+                        await leaderboardCommand.execute(interaction, { 
+                            xpManager, 
+                            databaseManager, 
+                            cacheManager,
+                            connectionManager 
+                        });
+                        console.log(`[BUTTON] ✅ Successfully executed leaderboard button: ${interaction.customId}`);
+                    } catch (error) {
+                        console.error(`[BUTTON] ❌ Error handling leaderboard button ${interaction.customId}:`, error);
+                        
+                        try {
+                            if (interaction.replied || interaction.deferred) {
+                                await interaction.followUp({ 
+                                    content: '❌ There was an error processing your request!', 
+                                    ephemeral: true 
+                                });
+                            } else {
+                                await interaction.reply({ 
+                                    content: '❌ There was an error processing your request!', 
+                                    ephemeral: true 
+                                });
+                            }
+                        } catch (replyError) {
+                            console.error(`[BUTTON] ❌ Error sending button error message:`, replyError);
+                        }
+                    }
+                } else {
+                    console.error(`[BUTTON] ❌ Leaderboard command not found for button interaction`);
+                    try {
+                        await interaction.reply({ 
+                            content: '❌ Command not found!', 
+                            ephemeral: true 
+                        });
+                    } catch (replyError) {
+                        console.error(`[BUTTON] ❌ Error sending button not found message:`, replyError);
+                    }
+                }
+            } else {
+                console.log(`[BUTTON] ⚠️ Unknown button interaction: ${interaction.customId}`);
+            }
+        } else {
+            console.log(`[INTERACTION] ⚠️ Unknown interaction type: ${interaction.type}`);
         }
+    } catch (error) {
+        console.error(`[INTERACTION] ❌ Critical error in interaction handler:`, error);
     }
 });
 
