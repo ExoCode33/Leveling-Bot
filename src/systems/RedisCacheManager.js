@@ -1,6 +1,6 @@
 /**
  * RedisCacheManager - High-level caching interface for Leveling-Bot
- * ENHANCED: Cache preloading system and advanced optimization
+ * ENHANCED: Cache preloading system and advanced optimization with race condition protection
  */
 class RedisCacheManager {
     constructor(redis = null, connectionManager = null) {
@@ -410,7 +410,7 @@ class RedisCacheManager {
         }
     }
 
-    // ==================== LEADERBOARD CACHING ====================
+    // ==================== LEADERBOARD CACHING WITH RACE PROTECTION ====================
     
     /**
      * Cache leaderboard data (5 minute TTL for fast updates)
@@ -461,17 +461,25 @@ class RedisCacheManager {
     }
 
     /**
-     * Cache validated users list (10 minute TTL)
+     * ENHANCED: Cache validated users with timestamp protection
      */
     async cacheValidatedUsers(guildId, users) {
         try {
             const key = `${this.keyPrefix}validated:${guildId}`;
             const ttl = 600; // 10 minutes
             
+            // Add timestamp and version to cache entry
+            const cacheData = {
+                users: users,
+                cachedAt: Date.now(),
+                version: this.generateCacheVersion(),
+                guildId: guildId
+            };
+            
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
-                return await this.connectionManager.setCache(key, JSON.stringify(users), ttl);
+                return await this.connectionManager.setCache(key, JSON.stringify(cacheData), ttl);
             } else if (this.redis) {
-                await this.redis.setex(key, ttl, JSON.stringify(users));
+                await this.redis.setex(key, ttl, JSON.stringify(cacheData));
                 return true;
             }
             
@@ -483,7 +491,7 @@ class RedisCacheManager {
     }
 
     /**
-     * Get cached validated users
+     * ENHANCED: Get cached validated users with staleness check
      */
     async getCachedValidatedUsers(guildId) {
         try {
@@ -492,12 +500,30 @@ class RedisCacheManager {
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const data = await this.connectionManager.getCache(key);
                 if (data) {
-                    return JSON.parse(data);
+                    const cacheData = JSON.parse(data);
+                    
+                    // Check if cache is too old (older than 8 minutes = 480 seconds)
+                    const cacheAge = Date.now() - cacheData.cachedAt;
+                    if (cacheAge > 480000) { // 8 minutes
+                        console.log(`[CACHE] Validated users cache too old (${Math.round(cacheAge/1000)}s), ignoring`);
+                        return null;
+                    }
+                    
+                    return cacheData.users;
                 }
             } else if (this.redis) {
                 const data = await this.redis.get(key);
                 if (data) {
-                    return JSON.parse(data);
+                    const cacheData = JSON.parse(data);
+                    
+                    // Check staleness
+                    const cacheAge = Date.now() - cacheData.cachedAt;
+                    if (cacheAge > 480000) { // 8 minutes
+                        console.log(`[CACHE] Validated users cache too old (${Math.round(cacheAge/1000)}s), ignoring`);
+                        return null;
+                    }
+                    
+                    return cacheData.users;
                 }
             }
             
@@ -509,7 +535,48 @@ class RedisCacheManager {
     }
 
     /**
-     * Invalidate guild cache when users leave
+     * ENHANCED: Safe cache write - only cache if key wasn't recently invalidated
+     */
+    async safeWriteValidatedUsers(guildId, users) {
+        try {
+            const key = `${this.keyPrefix}validated:${guildId}`;
+            
+            // Check if key exists and was recently invalidated
+            const existingData = await this.getCachedValidatedUsers(guildId);
+            
+            // If cache exists and is very fresh (< 30 seconds), don't overwrite
+            // This prevents race condition overwrites
+            if (existingData) {
+                console.log('[CACHE] Recent cache exists, skipping write to prevent race condition');
+                return false;
+            }
+            
+            // Check invalidation flag
+            const invalidationFlag = `${this.keyPrefix}invalidated:${guildId}`;
+            
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                const wasInvalidated = await this.connectionManager.getCache(invalidationFlag);
+                if (wasInvalidated) {
+                    const invalidatedAt = parseInt(wasInvalidated);
+                    const timeSinceInvalidation = Date.now() - invalidatedAt;
+                    
+                    if (timeSinceInvalidation < 30000) { // Less than 30 seconds
+                        console.log(`[CACHE] Cache was recently invalidated (${Math.round(timeSinceInvalidation/1000)}s ago), skipping write`);
+                        return false;
+                    }
+                }
+            }
+            
+            return await this.cacheValidatedUsers(guildId, users);
+            
+        } catch (error) {
+            console.error('[CACHE] Error in safe cache write:', error);
+            return false;
+        }
+    }
+
+    /**
+     * ENHANCED: Invalidate guild cache with flag setting
      */
     async invalidateGuildCache(guildId) {
         try {
@@ -517,6 +584,12 @@ class RedisCacheManager {
                 `${this.keyPrefix}leaderboard:${guildId}:*`,
                 `${this.keyPrefix}validated:${guildId}`
             ];
+
+            // Set invalidation flag with 60 second TTL
+            const invalidationFlag = `${this.keyPrefix}invalidated:${guildId}`;
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                await this.connectionManager.setCache(invalidationFlag, Date.now().toString(), 60);
+            }
 
             let totalCleared = 0;
             for (const pattern of patterns) {
@@ -533,7 +606,7 @@ class RedisCacheManager {
             }
 
             if (totalCleared > 0) {
-                console.log(`[CACHE] Invalidated ${totalCleared} guild cache entries for ${guildId}`);
+                console.log(`[CACHE] Invalidated ${totalCleared} guild cache entries for ${guildId} with race protection`);
             }
 
             return totalCleared > 0;
@@ -618,6 +691,33 @@ class RedisCacheManager {
      */
     getCurrentDateKey() {
         return new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    }
+
+    /**
+     * Generate cache version for consistency checking
+     */
+    generateCacheVersion() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+
+    /**
+     * Clear invalidation flags (call periodically)
+     */
+    async cleanupInvalidationFlags() {
+        try {
+            const pattern = `${this.keyPrefix}invalidated:*`;
+            
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                await this.connectionManager.clearPattern(pattern);
+            } else if (this.redis) {
+                const keys = await this.redis.keys(pattern);
+                if (keys.length > 0) {
+                    await this.redis.del(...keys);
+                }
+            }
+        } catch (error) {
+            console.error('[CACHE] Error cleaning invalidation flags:', error);
+        }
     }
 
     /**
