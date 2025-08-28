@@ -69,6 +69,15 @@ module.exports = {
                 console.log('[LEADERBOARD] Slash command deferred');
             }
 
+            // Check bot permissions
+            const botPermissions = interaction.guild.members.me.permissions;
+            console.log(`[LEADERBOARD] Bot permissions check:`);
+            console.log(`  - VIEW_CHANNEL: ${botPermissions.has('ViewChannel')}`);
+            console.log(`  - READ_MESSAGE_HISTORY: ${botPermissions.has('ReadMessageHistory')}`);
+            console.log(`  - Send Messages: ${botPermissions.has('SendMessages')}`);
+            console.log(`  - Embed Links: ${botPermissions.has('EmbedLinks')}`);
+            console.log(`  - Attach Files: ${botPermissions.has('AttachFiles')}`);
+            
             // Get leaderboard data
             console.log('[LEADERBOARD] Fetching leaderboard data...');
             const leaderboardData = await xpManager.getLeaderboard(interaction.guild.id, 50);
