@@ -1,3 +1,17 @@
+const { Client, GatewayIntentBits, Collection } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+
+// Load environment variables
+require('dotenv').config();
+
+// Import core systems
+console.log('📁 Loading Connection Manager...');
+const ConnectionManager = require('./src/systems/ConnectionManager');
+
+console.log('📁 Loading DatabaseManager...');
+const DatabaseManager = require('./src/systems/DatabaseManager');
+
 console.log('📁 Loading RedisCacheManager...');
 const RedisCacheManager = require('./src/systems/RedisCacheManager');
 
@@ -718,7 +732,6 @@ setInterval(async () => {
 }, 1800000); // 30 minutes
 
 // Start the bot
-startBot().catch(console.error); the bot
 async function startBot() {
     console.log('🚀 Starting One Piece XP Bot...');
     
@@ -735,18 +748,5 @@ module.exports = {
     connectionManager 
 };
 
-// Startconst { Client, GatewayIntentBits, Collection } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
-
-// Load environment variables
-require('dotenv').config();
-
-// Import core systems
-console.log('📁 Loading Connection Manager...');
-const ConnectionManager = require('./src/systems/ConnectionManager');
-
-console.log('📁 Loading DatabaseManager...');
-const DatabaseManager = require('./src/systems/DatabaseManager');
-
-console.log('📁 Loading RedisCacheManager..
+// Start the bot
+startBot().catch(console.error);
