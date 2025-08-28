@@ -1,17 +1,3 @@
-const { Client, GatewayIntentBits, Collection } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
-
-// Load environment variables
-require('dotenv').config();
-
-// Import core systems
-console.log('📁 Loading Connection Manager...');
-const ConnectionManager = require('./src/systems/ConnectionManager');
-
-console.log('📁 Loading DatabaseManager...');
-const DatabaseManager = require('./src/systems/DatabaseManager');
-
 console.log('📁 Loading RedisCacheManager...');
 const RedisCacheManager = require('./src/systems/RedisCacheManager');
 
@@ -162,6 +148,7 @@ async function displayCacheStats() {
                 console.log(`│ Avatars:    ${String(stats.avatars || 0).padEnd(25)} │`);
                 console.log(`│ Posters:    ${String(stats.posters || 0).padEnd(25)} │`);
                 console.log(`│ Cooldowns:  ${String(stats.cooldowns || 0).padEnd(25)} │`);
+                console.log(`│ L-boards:   ${String(stats.leaderboards || 0).padEnd(25)} │`);
                 if (stats.memoryUsed) {
                     console.log(`│ Memory:     ${String(stats.memoryUsed).padEnd(25)} │`);
                 }
@@ -177,11 +164,52 @@ async function displayCacheStats() {
     }
 }
 
-// Bot ready event - FIXED DEPRECATION WARNING
+// CACHE PRELOADING SYSTEM
+async function startCachePreloading() {
+    try {
+        // Only preload if Redis is available
+        if (!cacheManager || !connectionManager?.isRedisAvailable()) {
+            console.log('🔄 [PRELOAD] Redis not available, skipping cache preloading');
+            return;
+        }
+
+        console.log('🚀 [PRELOAD] Starting cache preloading system in 30 seconds...');
+        console.log('🚀 [PRELOAD] This will improve leaderboard and poster generation speed');
+        
+        // Wait for bot to fully settle, then start preloading
+        setTimeout(async () => {
+            console.log('🔄 [PRELOAD] Beginning cache preloading...');
+            
+            try {
+                const preloadSuccess = await cacheManager.preloadCache(client, databaseManager);
+                
+                if (preloadSuccess) {
+                    const stats = cacheManager.getPreloadStats();
+                    console.log('✅ [PRELOAD] Cache preloading completed successfully!');
+                    console.log(`✅ [PRELOAD] Performance boost ready: ${stats.avatarsPreloaded + stats.postersPreloaded} items cached`);
+                    
+                    // Display updated cache stats after preloading
+                    setTimeout(async () => {
+                        await displayCacheStats();
+                    }, 2000);
+                } else {
+                    console.log('⚠️ [PRELOAD] Cache preloading completed with issues');
+                }
+            } catch (preloadError) {
+                console.error('❌ [PRELOAD] Cache preloading failed:', preloadError);
+            }
+        }, 30000); // 30 seconds delay to let bot settle
+        
+    } catch (error) {
+        console.error('❌ [PRELOAD] Error starting cache preloading:', error);
+    }
+}
+
+// Bot ready event - ENHANCED WITH CACHE PRELOADING
 client.once('clientReady', async () => {
     console.log('🏴‍☠️ ═══════════════════════════════════════');
     console.log('🏴‍☠️           ONE PIECE XP BOT');
-    console.log('🏴‍☠️ ═══════════════════════════════════────');
+    console.log('🏴‍☠️ ═══════════════════════════════────');
     console.log(`⚓ Logged in as ${client.user.tag}`);
     console.log(`🏴‍☠️ Serving ${client.guilds.cache.size} server(s)`);
     console.log(`🎯 Commands loaded: ${client.commands.size}`);
@@ -199,6 +227,9 @@ client.once('clientReady', async () => {
     setTimeout(async () => {
         await displayCacheStats();
     }, 10000); // Wait 10 seconds for systems to settle
+
+    // START CACHE PRELOADING SYSTEM
+    await startCachePreloading();
 });
 
 // Message event
@@ -278,6 +309,46 @@ client.on('messageCreate', async (message) => {
             await message.reply(`❌ Cache test error: ${error.message}`);
         }
     }
+
+    // Admin cache preload command
+    if (message.content === '!preload' && message.author.id === process.env.ADMIN_USER_ID) {
+        try {
+            if (cacheManager.isPreloading()) {
+                return await message.reply('⚠️ Cache preloading is already in progress!');
+            }
+
+            await message.reply('🚀 Starting manual cache preloading...');
+            
+            const preloadSuccess = await cacheManager.preloadCache(client, databaseManager);
+            const stats = cacheManager.getPreloadStats();
+            
+            const embed = {
+                color: preloadSuccess ? 0x00FF00 : 0xFFA500,
+                title: '🔄 **Manual Cache Preload Results**',
+                description: preloadSuccess ? 
+                    '```diff\n+ Cache preloading completed successfully\n```' : 
+                    '```diff\n! Cache preloading completed with issues\n```',
+                fields: [
+                    {
+                        name: '📊 **Preload Statistics**',
+                        value: `**Total Users:** ${stats.totalUsers}\n**Avatars Cached:** ${stats.avatarsPreloaded}\n**Posters Cached:** ${stats.postersPreloaded}\n**Errors:** ${stats.errors}`,
+                        inline: true
+                    },
+                    {
+                        name: '⏱️ **Performance**',
+                        value: `**Duration:** ${((stats.endTime - stats.startTime) / 1000).toFixed(2)}s\n**Rate:** ${Math.round(stats.totalUsers / ((stats.endTime - stats.startTime) / 1000))} users/sec`,
+                        inline: true
+                    }
+                ],
+                footer: { text: '⚓ Marine Intelligence Division • Manual Cache Preload' },
+                timestamp: new Date().toISOString()
+            };
+            
+            await message.reply({ embeds: [embed] });
+        } catch (error) {
+            await message.reply(`❌ Cache preload error: ${error.message}`);
+        }
+    }
     
     // Admin health check command
     if (message.content === '!health' && message.author.id === process.env.ADMIN_USER_ID) {
@@ -304,6 +375,51 @@ client.on('messageCreate', async (message) => {
         };
         
         await message.reply({ embeds: [embed] });
+    }
+
+    // Admin cache stats command
+    if (message.content === '!cachestats' && message.author.id === process.env.ADMIN_USER_ID) {
+        try {
+            const stats = await cacheManager.getCacheStats();
+            const preloadStats = cacheManager.getPreloadStats();
+            
+            const embed = {
+                color: 0x4A90E2,
+                title: '📊 **Detailed Cache Statistics**',
+                description: '```diff\n+ CACHE PERFORMANCE REPORT\n```',
+                fields: [
+                    {
+                        name: '🔴 **Redis Status**',
+                        value: `**Mode:** ${stats.mode}\n**Connected:** ${stats.redis ? 'Yes' : 'No'}\n**Total Entries:** ${stats.total || 0}`,
+                        inline: true
+                    },
+                    {
+                        name: '📊 **Cache Breakdown**',
+                        value: `**Avatars:** ${stats.avatars || 0}\n**Posters:** ${stats.posters || 0}\n**Cooldowns:** ${stats.cooldowns || 0}\n**Leaderboards:** ${stats.leaderboards || 0}`,
+                        inline: true
+                    },
+                    {
+                        name: '🚀 **Preload Stats**',
+                        value: `**Users Processed:** ${preloadStats.totalUsers || 0}\n**Avatars Preloaded:** ${preloadStats.avatarsPreloaded || 0}\n**Posters Preloaded:** ${preloadStats.postersPreloaded || 0}\n**Errors:** ${preloadStats.errors || 0}`,
+                        inline: false
+                    }
+                ],
+                footer: { text: '⚓ Marine Intelligence Division • Cache Analytics' },
+                timestamp: new Date().toISOString()
+            };
+            
+            if (stats.memoryUsed) {
+                embed.fields.push({
+                    name: '💾 **Memory Usage**',
+                    value: `**Redis Memory:** ${stats.memoryUsed}`,
+                    inline: true
+                });
+            }
+            
+            await message.reply({ embeds: [embed] });
+        } catch (error) {
+            await message.reply(`❌ Cache stats error: ${error.message}`);
+        }
     }
 });
 
@@ -336,6 +452,16 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
             
             console.log(`[ROLE CHANGE] Detected role change for ${newMember.user.username}`);
             
+            // Invalidate cache when user roles change (affects daily caps and potentially avatars)
+            if (cacheManager) {
+                await cacheManager.invalidateGuildCache(newMember.guild.id);
+                await cacheManager.invalidateUserDailyProgress(
+                    newMember.user.id, 
+                    newMember.guild.id, 
+                    cacheManager.getCurrentDateKey()
+                );
+            }
+            
             // Check if any tier roles were affected
             const tierRoles = [];
             for (let tier = 1; tier <= 10; tier++) {
@@ -363,16 +489,6 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
             // If tier roles changed, handle daily cap adjustment and cache invalidation
             if (tierRoleChanged && xpManager && xpManager.dailyCapManager) {
                 await xpManager.dailyCapManager.handleRoleChange(newMember, oldRoles, newRoles);
-                
-                // Invalidate cache for this user's daily progress
-                if (cacheManager) {
-                    const currentDate = cacheManager.getCurrentDateKey();
-                    await cacheManager.invalidateUserDailyProgress(
-                        newMember.user.id, 
-                        newMember.guild.id, 
-                        currentDate
-                    );
-                }
             }
         }
     } catch (error) {
@@ -380,7 +496,32 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     }
 });
 
-// Slash command and button interaction handler - FIXED
+// Guild member remove event (invalidate cache when users leave)
+client.on('guildMemberRemove', async (member) => {
+    try {
+        console.log(`[MEMBER LEAVE] ${member.user.username} left ${member.guild.name}`);
+        
+        // Invalidate relevant caches when users leave
+        if (cacheManager) {
+            // Invalidate guild-wide caches (leaderboard, validated users)
+            await cacheManager.invalidateGuildCache(member.guild.id);
+            
+            // Invalidate user-specific caches (posters, daily progress)
+            await cacheManager.invalidateUserPosters(member.user.id);
+            await cacheManager.invalidateUserDailyProgress(
+                member.user.id, 
+                member.guild.id, 
+                cacheManager.getCurrentDateKey()
+            );
+            
+            console.log(`[CACHE] Invalidated caches for user ${member.user.username} who left`);
+        }
+    } catch (error) {
+        console.error('Error handling guild member remove:', error);
+    }
+});
+
+// Slash command and button interaction handler
 client.on('interactionCreate', async (interaction) => {
     try {
         if (interaction.isChatInputCommand()) {
@@ -547,15 +688,28 @@ setInterval(async () => {
     }
 }, 300000); // 5 minutes
 
-// Periodic cache stats (every 30 minutes)
+// Periodic cache stats (every 30 minutes) with performance insights
 setInterval(async () => {
     try {
         if (cacheManager) {
             const stats = await cacheManager.getCacheStats();
+            const preloadStats = cacheManager.getPreloadStats();
+            
             console.log(`📊 [CACHE STATS] Mode: ${stats.mode}, Entries: ${stats.total || stats.entries || 0}`);
             
             if (stats.redis && stats.total > 0) {
-                console.log(`📊 [CACHE BREAKDOWN] Avatars: ${stats.avatars || 0}, Posters: ${stats.posters || 0}, Cooldowns: ${stats.cooldowns || 0}`);
+                console.log(`📊 [CACHE BREAKDOWN] Avatars: ${stats.avatars || 0}, Posters: ${stats.posters || 0}, Cooldowns: ${stats.cooldowns || 0}, Leaderboards: ${stats.leaderboards || 0}`);
+                
+                // Performance insights
+                if (preloadStats.totalUsers > 0) {
+                    console.log(`🚀 [PERFORMANCE] Preloaded: ${preloadStats.avatarsPreloaded + preloadStats.postersPreloaded} items, Users: ${preloadStats.totalUsers}`);
+                }
+                
+                // Cache hit rate estimation (avatars + posters vs total users processed)
+                if (preloadStats.totalUsers > 0) {
+                    const cacheHitRate = Math.round(((stats.avatars || 0) + (stats.posters || 0)) / preloadStats.totalUsers * 100);
+                    console.log(`⚡ [PERFORMANCE] Estimated cache efficiency: ${cacheHitRate}%`);
+                }
             }
         }
     } catch (error) {
@@ -564,6 +718,7 @@ setInterval(async () => {
 }, 1800000); // 30 minutes
 
 // Start the bot
+startBot().catch(console.error); the bot
 async function startBot() {
     console.log('🚀 Starting One Piece XP Bot...');
     
@@ -580,5 +735,18 @@ module.exports = {
     connectionManager 
 };
 
-// Start the bot
-startBot().catch(console.error);
+// Startconst { Client, GatewayIntentBits, Collection } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+
+// Load environment variables
+require('dotenv').config();
+
+// Import core systems
+console.log('📁 Loading Connection Manager...');
+const ConnectionManager = require('./src/systems/ConnectionManager');
+
+console.log('📁 Loading DatabaseManager...');
+const DatabaseManager = require('./src/systems/DatabaseManager');
+
+console.log('📁 Loading RedisCacheManager..
