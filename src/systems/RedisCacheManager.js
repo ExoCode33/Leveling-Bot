@@ -1,6 +1,6 @@
 /**
  * RedisCacheManager - High-level caching interface for Leveling-Bot
- * FIXED: Cache preloading system and advanced optimization with race condition protection
+ * FIXED: Redis KEYS command doesn't automatically use keyPrefix in ioredis
  */
 class RedisCacheManager {
     constructor(redis = null, connectionManager = null) {
@@ -887,7 +887,7 @@ class RedisCacheManager {
     }
 
     /**
-     * Get cache statistics with proper Redis key counting - FIXED
+     * Get cache statistics with proper Redis key counting - FIXED FOR IOREDIS KEYPREFIX ISSUE
      */
     async getCacheStats() {
         try {
@@ -903,15 +903,16 @@ class RedisCacheManager {
             
             console.log(`[CACHE STATS] Counting Redis keys with prefix: ${this.keyPrefix}`);
             
-            // Count keys by type using actual Redis commands
+            // CRITICAL FIX: ioredis doesn't automatically apply keyPrefix to KEYS command
+            // We need to search for the actual keys with prefix manually
             const stats = {
-                avatars: await this.countRedisKeys(`${this.keyPrefix}avatar:*`),
-                posters: await this.countRedisKeys(`${this.keyPrefix}poster:*`),
-                cooldowns: await this.countRedisKeys(`${this.keyPrefix}cooldown:*`),
-                leaderboards: await this.countRedisKeys(`${this.keyPrefix}leaderboard:*`),
-                validated: await this.countRedisKeys(`${this.keyPrefix}validated:*`),
-                daily: await this.countRedisKeys(`${this.keyPrefix}daily:*`),
-                invalidated: await this.countRedisKeys(`${this.keyPrefix}invalidated:*`)
+                avatars: await this.countRedisKeysDirect(redis, `avatar:*`),
+                posters: await this.countRedisKeysDirect(redis, `poster:*`),
+                cooldowns: await this.countRedisKeysDirect(redis, `cooldown:*`),
+                leaderboards: await this.countRedisKeysDirect(redis, `leaderboard:*`),
+                validated: await this.countRedisKeysDirect(redis, `validated:*`),
+                daily: await this.countRedisKeysDirect(redis, `daily:*`),
+                invalidated: await this.countRedisKeysDirect(redis, `invalidated:*`)
             };
             
             stats.total = Object.values(stats).reduce((sum, count) => sum + count, 0);
@@ -943,23 +944,21 @@ class RedisCacheManager {
     }
 
     /**
-     * Count Redis keys with proper error handling and logging
+     * Count Redis keys directly with full prefix - FIXED FOR IOREDIS
      */
-    async countRedisKeys(pattern) {
+    async countRedisKeysDirect(redis, pattern) {
         try {
-            if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
-                console.log(`[CACHE STATS] Redis not available for pattern: ${pattern}`);
-                return 0;
-            }
-
-            const redis = this.connectionManager.getRedis();
-            console.log(`[CACHE STATS] Counting keys for pattern: ${pattern}`);
+            // CRITICAL: ioredis doesn't apply keyPrefix to KEYS command automatically
+            // We must include the full prefix manually
+            const fullPattern = `${this.keyPrefix}${pattern}`;
             
-            const keys = await redis.keys(pattern);
+            console.log(`[CACHE STATS] Searching for pattern: ${fullPattern}`);
             
-            console.log(`[CACHE STATS] Pattern "${pattern}" found ${keys.length} keys`);
+            const keys = await redis.keys(fullPattern);
+            
+            console.log(`[CACHE STATS] Pattern "${fullPattern}" found ${keys.length} keys`);
             if (keys.length > 0 && keys.length <= 5) {
-                console.log(`[CACHE STATS] Sample keys: ${keys.join(', ')}`);
+                console.log(`[CACHE STATS] Sample keys: ${keys.slice(0, 3).join(', ')}`);
             }
             
             return keys.length;
@@ -974,7 +973,26 @@ class RedisCacheManager {
      * Count keys matching pattern - IMPROVED IMPLEMENTATION
      */
     async countKeys(pattern) {
-        return await this.countRedisKeys(pattern);
+        try {
+            if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
+                return 0;
+            }
+
+            const redis = this.connectionManager.getRedis();
+            
+            // Handle both with and without keyPrefix in pattern
+            let searchPattern = pattern;
+            if (!pattern.startsWith(this.keyPrefix)) {
+                searchPattern = `${this.keyPrefix}${pattern}`;
+            }
+            
+            const keys = await redis.keys(searchPattern);
+            return keys.length;
+            
+        } catch (error) {
+            console.error(`[CACHE] Error counting keys for pattern ${pattern}:`, error);
+            return 0;
+        }
     }
 
     /**
@@ -1062,7 +1080,7 @@ class RedisCacheManager {
             const redis = this.connectionManager.getRedis();
             console.log('[CACHE DEBUG] ================ CACHE CONTENTS DEBUG ================');
             
-            // List sample keys from each category
+            // List sample keys from each category - FIXED FOR KEYPREFIX
             const categories = [
                 { name: 'Avatars', pattern: `${this.keyPrefix}avatar:*` },
                 { name: 'Posters', pattern: `${this.keyPrefix}poster:*` },
@@ -1205,7 +1223,7 @@ class RedisCacheManager {
     }
 
     /**
-     * Clear all cache (USE WITH EXTREME CAUTION)
+     * Clear all cache (USE WITH EXTREME CAUTION) - FIXED FOR KEYPREFIX
      */
     async debugClearAllCache() {
         try {
@@ -1215,6 +1233,8 @@ class RedisCacheManager {
             }
 
             const redis = this.connectionManager.getRedis();
+            
+            // CRITICAL FIX: Use full keyPrefix in pattern for ioredis
             const keys = await redis.keys(`${this.keyPrefix}*`);
             
             console.log(`[CACHE DEBUG] Found ${keys.length} cache keys to clear`);
