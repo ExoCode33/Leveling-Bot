@@ -218,7 +218,7 @@ class RedisCacheManager {
      */
     async preloadUserPoster(userData, member, guild) {
         try {
-            const BountyCalculator = require('./BountyCalculator');
+            const BountyCalculator = require('../utils/BountyCalculator');
             const bountyCalculator = new BountyCalculator();
             const bounty = bountyCalculator.getBountyForLevel(userData.level);
 
@@ -232,7 +232,7 @@ class RedisCacheManager {
             console.log(`[PRELOAD] 🎨 Generating poster for ${member.displayName} (Level ${userData.level})...`);
 
             // Generate poster
-            const CanvasGenerator = require('./CanvasGenerator');
+            const CanvasGenerator = require('../utils/CanvasGenerator');
             const canvasGenerator = new CanvasGenerator(this);
             
             const fullUserData = {
