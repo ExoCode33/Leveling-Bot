@@ -4,7 +4,7 @@ const BountyCalculator = require('./BountyCalculator');
 
 /**
  * CanvasGenerator - Handles all canvas/image generation for wanted posters
- * FIXED: Proper caching integration and avatar handling
+ * FIXED: Robust avatar loading with multiple fallback strategies
  */
 class CanvasGenerator {
     constructor(cacheManager = null) {
@@ -32,13 +32,15 @@ class CanvasGenerator {
     }
 
     /**
-     * Create wanted poster canvas with caching
+     * Create wanted poster canvas with robust avatar loading
      */
     async createWantedPoster(userData, guild) {
         const width = 600;
         const height = 900;
 
         try {
+            console.log(`[CANVAS] 🎨 Starting poster generation for user ${userData.userId} (Level ${userData.level})`);
+            
             // Check cache first
             const cacheKey = this.getPosterCacheKey(userData);
             if (this.cacheManager && cacheKey) {
@@ -74,7 +76,7 @@ class CanvasGenerator {
             // Draw "WANTED" title
             this.drawWantedTitle(ctx, width, height);
             
-            // Draw photo frame and avatar with caching
+            // Draw photo frame and avatar with improved loading
             await this.drawPhotoSection(ctx, userData, guild, width, height);
             
             // Draw "DEAD OR ALIVE"
@@ -108,10 +110,11 @@ class CanvasGenerator {
                 }
             }
             
+            console.log(`[CANVAS] ✅ Completed poster generation for user ${userData.userId}`);
             return canvas;
             
         } catch (error) {
-            console.error('[CANVAS] Error creating wanted poster:', error);
+            console.error('[CANVAS] ❌ Error creating wanted poster:', error);
             
             // Return simple fallback canvas
             return this.createFallbackCanvas(userData, width, height);
@@ -138,7 +141,7 @@ class CanvasGenerator {
             ctx.drawImage(texture, 0, 0, width, height);
             console.log('[CANVAS] ✅ Loaded scroll texture background');
         } catch (error) {
-            console.log('[CANVAS] Scroll texture not found, using fallback color');
+            console.log('[CANVAS] ⚠️ Scroll texture not found, using fallback color');
             ctx.fillStyle = '#f5e6c5';
             ctx.fillRect(0, 0, width, height);
         }
@@ -180,12 +183,14 @@ class CanvasGenerator {
     }
 
     /**
-     * Draw photo section with avatar and caching
+     * Draw photo section with robust avatar loading
      */
     async drawPhotoSection(ctx, userData, guild, width, height) {
         const photoSize = (95/100) * 400;
         const photoX = ((50/100) * width) - (photoSize/2);
         const photoY = height * (1 - 65/100) - (photoSize/2);
+        
+        console.log(`[CANVAS] 📷 Starting photo section for user ${userData.userId}`);
         
         // Draw photo frame
         ctx.strokeStyle = '#000000';
@@ -200,55 +205,73 @@ class CanvasGenerator {
             height: photoSize - 6 
         };
 
-        // Try to get member and load avatar
+        // Fill background with placeholder color first
+        ctx.fillStyle = '#f0f0f0';
+        ctx.fillRect(avatarArea.x, avatarArea.y, avatarArea.width, avatarArea.height);
+
+        // Try to load and draw avatar with multiple strategies
+        const avatarLoaded = await this.loadAndDrawAvatar(ctx, userData, guild, avatarArea);
+        
+        if (!avatarLoaded) {
+            console.log(`[CANVAS] ⚠️ No avatar loaded for user ${userData.userId}, showing placeholder`);
+            // Draw placeholder avatar
+            this.drawAvatarPlaceholder(ctx, avatarArea, userData);
+        }
+    }
+
+    /**
+     * Load and draw avatar with multiple fallback strategies
+     */
+    async loadAndDrawAvatar(ctx, userData, guild, avatarArea) {
         let member = null;
         let avatarBuffer = null;
         
         try {
+            console.log(`[CANVAS] 👤 Attempting to fetch member ${userData.userId}...`);
+            
             if (guild && userData.userId) {
-                member = await guild.members.fetch(userData.userId);
+                // Try to get member from cache first, then fetch
+                member = guild.members.cache.get(userData.userId);
+                if (!member) {
+                    member = await guild.members.fetch(userData.userId);
+                }
                 
                 if (member) {
-                    const avatarURL = member.user.displayAvatarURL({ 
-                        extension: 'png', 
-                        size: 512, 
-                        forceStatic: true 
-                    });
+                    console.log(`[CANVAS] ✅ Found member: ${member.user.username}`);
                     
-                    // Extract avatar hash for caching
-                    const avatarHash = this.extractAvatarHash(avatarURL);
+                    // Strategy 1: Try PNG format first (most reliable)
+                    avatarBuffer = await this.tryLoadAvatarFormat(member.user, 'png');
                     
-                    // Check cache first
-                    if (this.cacheManager && avatarHash) {
-                        console.log(`[CANVAS] 🔍 Checking avatar cache for user ${userData.userId}`);
-                        avatarBuffer = await this.cacheManager.getCachedAvatar(userData.userId, avatarHash);
-                    }
-                    
-                    // Load avatar if not cached
+                    // Strategy 2: Try JPEG if PNG failed
                     if (!avatarBuffer) {
-                        console.log(`[CANVAS] 📥 Loading avatar from URL for user ${userData.userId}`);
-                        const avatar = await loadImage(avatarURL);
-                        
-                        // Convert to buffer for caching
-                        const tempCanvas = createCanvas(512, 512);
-                        const tempCtx = tempCanvas.getContext('2d');
-                        tempCtx.drawImage(avatar, 0, 0, 512, 512);
-                        avatarBuffer = tempCanvas.toBuffer();
-                        
-                        // Cache the avatar
-                        if (this.cacheManager && avatarHash) {
-                            await this.cacheManager.cacheUserAvatar(userData.userId, avatarHash, avatarBuffer);
-                        }
+                        console.log('[CANVAS] 🔄 PNG failed, trying JPEG...');
+                        avatarBuffer = await this.tryLoadAvatarFormat(member.user, 'jpg');
                     }
+                    
+                    // Strategy 3: Try WEBP if JPEG failed
+                    if (!avatarBuffer) {
+                        console.log('[CANVAS] 🔄 JPEG failed, trying WEBP...');
+                        avatarBuffer = await this.tryLoadAvatarFormat(member.user, 'webp');
+                    }
+                    
+                    // Strategy 4: Try default avatar
+                    if (!avatarBuffer) {
+                        console.log('[CANVAS] 🔄 Custom avatar failed, trying default...');
+                        avatarBuffer = await this.tryLoadDefaultAvatar(member.user);
+                    }
+                } else {
+                    console.log(`[CANVAS] ❌ Could not fetch member ${userData.userId}`);
                 }
             }
         } catch (error) {
-            console.log(`[CANVAS] ⚠️ Could not fetch/load avatar for user ${userData.userId}:`, error.message);
+            console.error(`[CANVAS] ❌ Error fetching member ${userData.userId}:`, error.message);
         }
         
-        // Draw avatar if available
+        // Draw avatar if we got one
         if (avatarBuffer) {
             try {
+                console.log(`[CANVAS] 🎨 Drawing avatar for user ${userData.userId}...`);
+                
                 const avatar = await loadImage(avatarBuffer);
                 
                 // Create clipping mask for avatar
@@ -265,12 +288,124 @@ class CanvasGenerator {
                 ctx.restore();
                 
                 console.log(`[CANVAS] ✅ Successfully drew avatar for user ${userData.userId}`);
+                return true;
             } catch (drawError) {
-                console.log(`[CANVAS] ⚠️ Could not draw cached avatar for user ${userData.userId}:`, drawError.message);
+                console.error(`[CANVAS] ❌ Could not draw avatar for user ${userData.userId}:`, drawError.message);
             }
-        } else {
-            console.log(`[CANVAS] ℹ️ No avatar available for user ${userData.userId}, showing background`);
         }
+        
+        return false;
+    }
+
+    /**
+     * Try to load avatar in specific format
+     */
+    async tryLoadAvatarFormat(user, format) {
+        try {
+            console.log(`[CANVAS] 🔍 Trying ${format.toUpperCase()} format for ${user.username}...`);
+            
+            const avatarURL = user.displayAvatarURL({ 
+                extension: format, 
+                size: 512, 
+                forceStatic: true 
+            });
+            
+            console.log(`[CANVAS] 📡 Avatar URL: ${avatarURL}`);
+            
+            // Extract avatar hash for caching
+            const avatarHash = this.extractAvatarHash(avatarURL);
+            
+            // Check cache first
+            if (this.cacheManager && avatarHash) {
+                console.log(`[CANVAS] 🔍 Checking avatar cache for user ${user.id} (${format})...`);
+                const cachedAvatar = await this.cacheManager.getCachedAvatar(user.id, avatarHash);
+                if (cachedAvatar) {
+                    console.log(`[CANVAS] ✅ Found cached avatar for user ${user.id} (${format})`);
+                    return cachedAvatar;
+                }
+            }
+            
+            // Load from URL
+            console.log(`[CANVAS] 📥 Loading avatar from URL for user ${user.id} (${format})...`);
+            const avatar = await loadImage(avatarURL);
+            
+            // Convert to buffer for consistency
+            const tempCanvas = createCanvas(512, 512);
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(avatar, 0, 0, 512, 512);
+            const buffer = tempCanvas.toBuffer();
+            
+            // Cache the avatar
+            if (this.cacheManager && avatarHash) {
+                await this.cacheManager.cacheUserAvatar(user.id, avatarHash, buffer);
+                console.log(`[CANVAS] ✅ Cached avatar for user ${user.id} (${format})`);
+            }
+            
+            console.log(`[CANVAS] ✅ Successfully loaded ${format.toUpperCase()} avatar for ${user.username}`);
+            return buffer;
+            
+        } catch (error) {
+            console.log(`[CANVAS] ❌ Failed to load ${format.toUpperCase()} avatar: ${error.message}`);
+            return null;
+        }
+    }
+
+    /**
+     * Try to load default Discord avatar
+     */
+    async tryLoadDefaultAvatar(user) {
+        try {
+            console.log(`[CANVAS] 🔄 Trying default avatar for ${user.username}...`);
+            
+            // Use default avatar URL
+            const defaultAvatarURL = `https://cdn.discordapp.com/embed/avatars/${user.discriminator % 5}.png`;
+            console.log(`[CANVAS] 📡 Default avatar URL: ${defaultAvatarURL}`);
+            
+            const avatar = await loadImage(defaultAvatarURL);
+            
+            // Convert to buffer
+            const tempCanvas = createCanvas(512, 512);
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(avatar, 0, 0, 512, 512);
+            const buffer = tempCanvas.toBuffer();
+            
+            console.log(`[CANVAS] ✅ Successfully loaded default avatar for ${user.username}`);
+            return buffer;
+            
+        } catch (error) {
+            console.log(`[CANVAS] ❌ Failed to load default avatar: ${error.message}`);
+            return null;
+        }
+    }
+
+    /**
+     * Draw avatar placeholder when no avatar can be loaded
+     */
+    drawAvatarPlaceholder(ctx, avatarArea, userData) {
+        console.log(`[CANVAS] 🎭 Drawing placeholder for user ${userData.userId}`);
+        
+        // Gray background
+        ctx.fillStyle = '#cccccc';
+        ctx.fillRect(avatarArea.x, avatarArea.y, avatarArea.width, avatarArea.height);
+        
+        // Draw question mark or user initial
+        ctx.fillStyle = '#666666';
+        ctx.font = `${avatarArea.width / 3}px Arial, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        let placeholderText = '?';
+        if (userData.member && userData.member.displayName) {
+            placeholderText = userData.member.displayName.charAt(0).toUpperCase();
+        }
+        
+        ctx.fillText(
+            placeholderText,
+            avatarArea.x + avatarArea.width / 2,
+            avatarArea.y + avatarArea.height / 2
+        );
+        
+        console.log(`[CANVAS] ✅ Drew placeholder "${placeholderText}" for user ${userData.userId}`);
     }
 
     /**
@@ -281,7 +416,7 @@ class CanvasGenerator {
             const match = avatarURL.match(/avatars\/\d+\/([a-f0-9]+)\.(png|jpg|gif|webp)/);
             return match ? match[1] : null;
         } catch (error) {
-            console.log('[CANVAS] Could not extract avatar hash');
+            console.log('[CANVAS] ⚠️ Could not extract avatar hash');
             return null;
         }
     }
@@ -344,7 +479,7 @@ class CanvasGenerator {
         const bountyAmount = this.bountyCalculator.getBountyForLevel(userData.level, isPirateKingData);
         const bountyStr = bountyAmount.toLocaleString();
         
-        console.log(`[CANVAS] Level ${userData.level}${isPirateKingData ? ' (PIRATE KING)' : ''} = Bounty ฿${bountyStr}`);
+        console.log(`[CANVAS] 💰 Level ${userData.level}${isPirateKingData ? ' (PIRATE KING)' : ''} = Bounty ฿${bountyStr}`);
         
         // Set up bounty text
         ctx.font = '54px Cinzel, Georgia, serif';
@@ -371,7 +506,7 @@ class CanvasGenerator {
             berryImg = await loadImage(berryPath);
             console.log('[CANVAS] ✅ Loaded berry symbol');
         } catch (error) {
-            console.log('[CANVAS] Berry image not found, creating fallback symbol');
+            console.log('[CANVAS] ⚠️ Berry image not found, creating fallback symbol');
             // Create fallback berry symbol
             const berryCanvas = createCanvas(berrySize, berrySize);
             const berryCtx = berryCanvas.getContext('2d');
@@ -415,7 +550,7 @@ class CanvasGenerator {
             
             console.log('[CANVAS] ✅ Drew One Piece logo');
         } catch (error) {
-            console.log('[CANVAS] One Piece logo not found, skipping');
+            console.log('[CANVAS] ⚠️ One Piece logo not found, skipping');
         }
     }
 
@@ -439,6 +574,8 @@ class CanvasGenerator {
      * Create fallback canvas if main generation fails
      */
     createFallbackCanvas(userData, width, height) {
+        console.log(`[CANVAS] 🛡️ Creating fallback canvas for user ${userData.userId}`);
+        
         const canvas = createCanvas(width, height);
         const ctx = canvas.getContext('2d');
         
@@ -463,7 +600,13 @@ class CanvasGenerator {
         ctx.font = 'bold 40px Arial';
         ctx.fillText(`฿${bounty.toLocaleString()}`, width / 2, height * 0.9);
         
-        console.log('[CANVAS] ✅ Created fallback canvas');
+        // Draw name if available
+        if (userData.member) {
+            ctx.font = 'bold 50px Arial';
+            ctx.fillText(userData.member.displayName.toUpperCase(), width / 2, height * 0.6);
+        }
+        
+        console.log(`[CANVAS] ✅ Created fallback canvas for user ${userData.userId}`);
         return canvas;
     }
 
