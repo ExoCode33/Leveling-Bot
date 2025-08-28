@@ -1,3 +1,251 @@
+const { Client, GatewayIntentBits, Collection } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+
+// Load environment variables
+require('dotenv').config();
+
+// Import core systems
+console.log('📁 Loading Connection Manager...');
+const ConnectionManager = require('./src/systems/ConnectionManager');
+
+console.log('📁 Loading DatabaseManager...');
+const DatabaseManager = require('./src/systems/DatabaseManager');
+
+console.log('📁 Loading RedisCacheManager...');
+const RedisCacheManager = require('./src/systems/RedisCacheManager');
+
+console.log('📁 Loading XPManager...');
+const XPManager = require('./src/systems/XPManager');
+
+console.log('📁 Loading CommandLoader...');
+const { loadCommands, registerSlashCommands } = require('./src/utils/CommandLoader');
+
+// Configuration validation
+const requiredEnvVars = ['DISCORD_TOKEN', 'CLIENT_ID', 'DATABASE_URL'];
+for (const envVar of requiredEnvVars) {
+    if (!process.env[envVar]) {
+        console.error(`❌ Missing required environment variable: ${envVar}`);
+        process.exit(1);
+    }
+}
+
+// Create Discord client
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessageReactions
+    ]
+});
+
+// Global managers
+let connectionManager;
+let databaseManager;
+let cacheManager;
+let xpManager;
+
+// Initialize all connections and systems
+async function initializeBot() {
+    try {
+        console.log('🚀 Starting One Piece XP Bot initialization...');
+        
+        // Initialize connection manager first
+        connectionManager = new ConnectionManager();
+        const connections = await connectionManager.initialize();
+        
+        console.log('📊 Connection Status:');
+        console.log(`   PostgreSQL: ${connections.postgres ? '✅ Connected' : '❌ Failed'}`);
+        console.log(`   Redis: ${connections.redis ? '✅ Connected' : '⚠️ Fallback Mode'}`);
+        
+        if (!connections.postgres) {
+            throw new Error('PostgreSQL connection required for bot operation');
+        }
+        
+        // Initialize database manager
+        const db = connectionManager.getPostgreSQL();
+        databaseManager = new DatabaseManager(db);
+        console.log('📋 Initializing database tables...');
+        await databaseManager.initializeTables();
+        console.log('✅ Database tables initialized');
+        
+        // Initialize cache manager (works with or without Redis)
+        const redis = connectionManager.getRedis();
+        cacheManager = new RedisCacheManager(redis, connectionManager);
+        await cacheManager.initialize();
+        
+        if (connections.redis) {
+            console.log('✅ Redis cache manager initialized with connection');
+            
+            // Test cache functionality
+            console.log('🧪 Testing cache functionality...');
+            const testResult = await cacheManager.testCache();
+            if (testResult.success) {
+                console.log('✅ Cache test passed - Redis is working correctly');
+            } else {
+                console.warn('⚠️ Cache test failed:', testResult.error || 'Unknown error');
+            }
+        } else {
+            console.log('⚠️ Cache manager initialized in fallback mode');
+        }
+        
+        // Initialize XP manager with cache support
+        xpManager = new XPManager(client, db, cacheManager);
+        await xpManager.initialize();
+        console.log('✅ XP Manager initialized with cache integration');
+        
+        // Load commands
+        client.commands = new Collection();
+        await loadCommands(client);
+        
+        // Register slash commands
+        if (process.env.CLIENT_ID && process.env.DISCORD_TOKEN) {
+            await registerSlashCommands(process.env.CLIENT_ID, process.env.DISCORD_TOKEN);
+        }
+        
+        console.log('✅ Bot initialization complete');
+        
+        // Display connection health
+        displayHealthStatus();
+        
+        // Display cache statistics
+        setTimeout(async () => {
+            await displayCacheStats();
+        }, 5000); // Wait 5 seconds for initial operations
+        
+    } catch (error) {
+        console.error('❌ Bot initialization failed:', error);
+        process.exit(1);
+    }
+}
+
+// Display connection health status
+function displayHealthStatus() {
+    const health = connectionManager.getHealthStatus();
+    
+    console.log('\n📊 SYSTEM HEALTH STATUS:');
+    console.log('┌─────────────────────────────────────────┐');
+    console.log('│            CONNECTION STATUS            │');
+    console.log('├─────────────────────────────────────────┤');
+    console.log(`│ PostgreSQL: ${health.postgresql.status.padEnd(25)} │`);
+    console.log(`│ Redis:      ${health.redis.status.padEnd(25)} │`);
+    console.log(`│ Cache:      ${health.cache.type.padEnd(25)} │`);
+    console.log('└─────────────────────────────────────────┘');
+    
+    if (health.redis.fallbackActive) {
+        console.log('⚠️  NOTICE: Redis unavailable - using in-memory fallback');
+        console.log('   • Bot is fully functional but without caching optimizations');
+        console.log('   • Canvas generation will be slower');
+        console.log('   • User stats queries will hit database directly');
+    }
+    console.log('');
+}
+
+// Display cache statistics
+async function displayCacheStats() {
+    try {
+        console.log('📊 CACHE STATISTICS:');
+        console.log('┌─────────────────────────────────────────┐');
+        console.log('│             CACHE STATUS                │');
+        console.log('├─────────────────────────────────────────┤');
+        
+        if (cacheManager) {
+            const stats = await cacheManager.getCacheStats();
+            console.log(`│ Mode:       ${stats.mode.padEnd(25)} │`);
+            console.log(`│ Redis:      ${(stats.redis ? 'Available' : 'Unavailable').padEnd(25)} │`);
+            console.log(`│ Entries:    ${String(stats.total || stats.entries || 0).padEnd(25)} │`);
+            
+            if (stats.redis) {
+                console.log(`│ Avatars:    ${String(stats.avatars || 0).padEnd(25)} │`);
+                console.log(`│ Posters:    ${String(stats.posters || 0).padEnd(25)} │`);
+                console.log(`│ Cooldowns:  ${String(stats.cooldowns || 0).padEnd(25)} │`);
+                console.log(`│ L-boards:   ${String(stats.leaderboards || 0).padEnd(25)} │`);
+                if (stats.memoryUsed) {
+                    console.log(`│ Memory:     ${String(stats.memoryUsed).padEnd(25)} │`);
+                }
+            }
+        } else {
+            console.log('│ Cache:      Not Available               │');
+        }
+        
+        console.log('└─────────────────────────────────────────┘');
+        console.log('');
+    } catch (error) {
+        console.error('Error displaying cache stats:', error);
+    }
+}
+
+// CACHE PRELOADING SYSTEM
+async function startCachePreloading() {
+    try {
+        // Only preload if Redis is available
+        if (!cacheManager || !connectionManager?.isRedisAvailable()) {
+            console.log('🔄 [PRELOAD] Redis not available, skipping cache preloading');
+            return;
+        }
+
+        console.log('🚀 [PRELOAD] Starting cache preloading system in 30 seconds...');
+        console.log('🚀 [PRELOAD] This will improve leaderboard and poster generation speed');
+        
+        // Wait for bot to fully settle, then start preloading
+        setTimeout(async () => {
+            console.log('🔄 [PRELOAD] Beginning cache preloading...');
+            
+            try {
+                const preloadSuccess = await cacheManager.preloadCache(client, databaseManager);
+                
+                if (preloadSuccess) {
+                    const stats = cacheManager.getPreloadStats();
+                    console.log('✅ [PRELOAD] Cache preloading completed successfully!');
+                    console.log(`✅ [PRELOAD] Performance boost ready: ${stats.avatarsPreloaded + stats.postersPreloaded} items cached`);
+                    
+                    // Display updated cache stats after preloading
+                    setTimeout(async () => {
+                        await displayCacheStats();
+                    }, 2000);
+                } else {
+                    console.log('⚠️ [PRELOAD] Cache preloading completed with issues');
+                }
+            } catch (preloadError) {
+                console.error('❌ [PRELOAD] Cache preloading failed:', preloadError);
+            }
+        }, 30000); // 30 seconds delay to let bot settle
+        
+    } catch (error) {
+        console.error('❌ [PRELOAD] Error starting cache preloading:', error);
+    }
+}
+
+// Bot ready event - ENHANCED WITH CACHE PRELOADING
+client.once('clientReady', async () => {
+    console.log('🏴‍☠️ ═══════════════════════════════════════');
+    console.log('🏴‍☠️           ONE PIECE XP BOT');
+    console.log('🏴‍☠️ ═══════════════════════════────');
+    console.log(`⚓ Logged in as ${client.user.tag}`);
+    console.log(`🏴‍☠️ Serving ${client.guilds.cache.size} server(s)`);
+    console.log(`🎯 Commands loaded: ${client.commands.size}`);
+    
+    const health = connectionManager.getHealthStatus();
+    console.log(`📊 PostgreSQL: ${health.postgresql.status}`);
+    console.log(`🔴 Redis: ${health.redis.status}`);
+    console.log(`💾 Cache: ${health.cache.type}`);
+    
+    console.log('🏴‍☠️ ═══════════════════════════════════════');
+    console.log('🎯 All systems operational!');
+    console.log('🏴‍☠️ ═══════════════════════════════════════');
+    
+    // Update cache stats display after bot is fully ready
+    setTimeout(async () => {
+        await displayCacheStats();
+    }, 10000); // Wait 10 seconds for systems to settle
+
+    // START CACHE PRELOADING SYSTEM
+    await startCachePreloading();
+});
+
 // Message event with ENHANCED DEBUG COMMANDS
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
@@ -656,7 +904,7 @@ async function gracefulShutdown() {
     process.exit(0);
 }
 
-// Periodic health checks (every 5 minutes)
+// Periodic health checks (every 30 minutes)
 setInterval(async () => {
     try {
         if (connectionManager) {
@@ -676,26 +924,6 @@ setInterval(async () => {
         console.error('❌ Health check error:', error);
     }
 }, 1800000); // 30 minutes
-
-// Start the bot
-async function startBot() {
-    console.log('🚀 Starting One Piece XP Bot...');
-    
-    await initializeBot();
-    await client.login(process.env.DISCORD_TOKEN);
-}
-
-// Export for other modules
-module.exports = { 
-    client, 
-    databaseManager, 
-    xpManager, 
-    cacheManager, 
-    connectionManager 
-};
-
-// Start the bot
-startBot().catch(console.error);300000); // 5 minutes
 
 // Periodic cache stats (every 30 minutes) with performance insights
 setInterval(async () => {
@@ -724,258 +952,24 @@ setInterval(async () => {
     } catch (error) {
         console.error('❌ Cache stats error:', error);
     }
-}, const { Client, GatewayIntentBits, Collection } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
+}, 1800000); // 30 minutes
 
-// Load environment variables
-require('dotenv').config();
-
-// Import core systems
-console.log('📁 Loading Connection Manager...');
-const ConnectionManager = require('./src/systems/ConnectionManager');
-
-console.log('📁 Loading DatabaseManager...');
-const DatabaseManager = require('./src/systems/DatabaseManager');
-
-console.log('📁 Loading RedisCacheManager...');
-const RedisCacheManager = require('./src/systems/RedisCacheManager');
-
-console.log('📁 Loading XPManager...');
-const XPManager = require('./src/systems/XPManager');
-
-console.log('📁 Loading CommandLoader...');
-const { loadCommands, registerSlashCommands } = require('./src/utils/CommandLoader');
-
-// Configuration validation
-const requiredEnvVars = ['DISCORD_TOKEN', 'CLIENT_ID', 'DATABASE_URL'];
-for (const envVar of requiredEnvVars) {
-    if (!process.env[envVar]) {
-        console.error(`❌ Missing required environment variable: ${envVar}`);
-        process.exit(1);
-    }
+// Start the bot
+async function startBot() {
+    console.log('🚀 Starting One Piece XP Bot...');
+    
+    await initializeBot();
+    await client.login(process.env.DISCORD_TOKEN);
 }
 
-// Create Discord client
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessageReactions
-    ]
-});
+// Export for other modules
+module.exports = { 
+    client, 
+    databaseManager, 
+    xpManager, 
+    cacheManager, 
+    connectionManager 
+};
 
-// Global managers
-let connectionManager;
-let databaseManager;
-let cacheManager;
-let xpManager;
-
-// Initialize all connections and systems
-async function initializeBot() {
-    try {
-        console.log('🚀 Starting One Piece XP Bot initialization...');
-        
-        // Initialize connection manager first
-        connectionManager = new ConnectionManager();
-        const connections = await connectionManager.initialize();
-        
-        console.log('📊 Connection Status:');
-        console.log(`   PostgreSQL: ${connections.postgres ? '✅ Connected' : '❌ Failed'}`);
-        console.log(`   Redis: ${connections.redis ? '✅ Connected' : '⚠️ Fallback Mode'}`);
-        
-        if (!connections.postgres) {
-            throw new Error('PostgreSQL connection required for bot operation');
-        }
-        
-        // Initialize database manager
-        const db = connectionManager.getPostgreSQL();
-        databaseManager = new DatabaseManager(db);
-        console.log('📋 Initializing database tables...');
-        await databaseManager.initializeTables();
-        console.log('✅ Database tables initialized');
-        
-        // Initialize cache manager (works with or without Redis)
-        const redis = connectionManager.getRedis();
-        cacheManager = new RedisCacheManager(redis, connectionManager);
-        await cacheManager.initialize();
-        
-        if (connections.redis) {
-            console.log('✅ Redis cache manager initialized with connection');
-            
-            // Test cache functionality
-            console.log('🧪 Testing cache functionality...');
-            const testResult = await cacheManager.testCache();
-            if (testResult.success) {
-                console.log('✅ Cache test passed - Redis is working correctly');
-            } else {
-                console.warn('⚠️ Cache test failed:', testResult.error || 'Unknown error');
-            }
-        } else {
-            console.log('⚠️ Cache manager initialized in fallback mode');
-        }
-        
-        // Initialize XP manager with cache support
-        xpManager = new XPManager(client, db, cacheManager);
-        await xpManager.initialize();
-        console.log('✅ XP Manager initialized with cache integration');
-        
-        // Load commands
-        client.commands = new Collection();
-        await loadCommands(client);
-        
-        // Register slash commands
-        if (process.env.CLIENT_ID && process.env.DISCORD_TOKEN) {
-            await registerSlashCommands(process.env.CLIENT_ID, process.env.DISCORD_TOKEN);
-        }
-        
-        console.log('✅ Bot initialization complete');
-        
-        // Display connection health
-        displayHealthStatus();
-        
-        // Display cache statistics
-        setTimeout(async () => {
-            await displayCacheStats();
-        }, 5000); // Wait 5 seconds for initial operations
-        
-    } catch (error) {
-        console.error('❌ Bot initialization failed:', error);
-        process.exit(1);
-    }
-}
-
-// Display connection health status
-function displayHealthStatus() {
-    const health = connectionManager.getHealthStatus();
-    
-    console.log('\n📊 SYSTEM HEALTH STATUS:');
-    console.log('┌─────────────────────────────────────────┐');
-    console.log('│            CONNECTION STATUS            │');
-    console.log('├─────────────────────────────────────────┤');
-    console.log(`│ PostgreSQL: ${health.postgresql.status.padEnd(25)} │`);
-    console.log(`│ Redis:      ${health.redis.status.padEnd(25)} │`);
-    console.log(`│ Cache:      ${health.cache.type.padEnd(25)} │`);
-    console.log('└─────────────────────────────────────────┘');
-    
-    if (health.redis.fallbackActive) {
-        console.log('⚠️  NOTICE: Redis unavailable - using in-memory fallback');
-        console.log('   • Bot is fully functional but without caching optimizations');
-        console.log('   • Canvas generation will be slower');
-        console.log('   • User stats queries will hit database directly');
-    }
-    console.log('');
-}
-
-// Display cache statistics
-async function displayCacheStats() {
-    try {
-        console.log('📊 CACHE STATISTICS:');
-        console.log('┌─────────────────────────────────────────┐');
-        console.log('│             CACHE STATUS                │');
-        console.log('├─────────────────────────────────────────┤');
-        
-        if (cacheManager) {
-            const stats = await cacheManager.getCacheStats();
-            console.log(`│ Mode:       ${stats.mode.padEnd(25)} │`);
-            console.log(`│ Redis:      ${(stats.redis ? 'Available' : 'Unavailable').padEnd(25)} │`);
-            console.log(`│ Entries:    ${String(stats.total || stats.entries || 0).padEnd(25)} │`);
-            
-            if (stats.redis) {
-                console.log(`│ Avatars:    ${String(stats.avatars || 0).padEnd(25)} │`);
-                console.log(`│ Posters:    ${String(stats.posters || 0).padEnd(25)} │`);
-                console.log(`│ Cooldowns:  ${String(stats.cooldowns || 0).padEnd(25)} │`);
-                console.log(`│ L-boards:   ${String(stats.leaderboards || 0).padEnd(25)} │`);
-                if (stats.memoryUsed) {
-                    console.log(`│ Memory:     ${String(stats.memoryUsed).padEnd(25)} │`);
-                }
-            }
-        } else {
-            console.log('│ Cache:      Not Available               │');
-        }
-        
-        console.log('└─────────────────────────────────────────┘');
-        console.log('');
-    } catch (error) {
-        console.error('Error displaying cache stats:', error);
-    }
-}
-
-// CACHE PRELOADING SYSTEM
-async function startCachePreloading() {
-    try {
-        // Only preload if Redis is available
-        if (!cacheManager || !connectionManager?.isRedisAvailable()) {
-            console.log('🔄 [PRELOAD] Redis not available, skipping cache preloading');
-            return;
-        }
-
-        console.log('🚀 [PRELOAD] Starting cache preloading system in 30 seconds...');
-        console.log('🚀 [PRELOAD] This will improve leaderboard and poster generation speed');
-        
-        // Wait for bot to fully settle, then start preloading
-        setTimeout(async () => {
-            console.log('🔄 [PRELOAD] Beginning cache preloading...');
-            
-            try {
-                const preloadSuccess = await cacheManager.preloadCache(client, databaseManager);
-                
-                if (preloadSuccess) {
-                    const stats = cacheManager.getPreloadStats();
-                    console.log('✅ [PRELOAD] Cache preloading completed successfully!');
-                    console.log(`✅ [PRELOAD] Performance boost ready: ${stats.avatarsPreloaded + stats.postersPreloaded} items cached`);
-                    
-                    // Display updated cache stats after preloading
-                    setTimeout(async () => {
-                        await displayCacheStats();
-                    }, 2000);
-                } else {
-                    console.log('⚠️ [PRELOAD] Cache preloading completed with issues');
-                }
-            } catch (preloadError) {
-                console.error('❌ [PRELOAD] Cache preloading failed:', preloadError);
-            }
-        }, 30000); // 30 seconds delay to let bot settle
-        
-    } catch (error) {
-        console.error('❌ [PRELOAD] Error starting cache preloading:', error);
-    }
-}
-
-// Bot ready event - ENHANCED WITH CACHE PRELOADING
-client.once('clientReady', async () => {
-    console.log('🏴‍☠️ ═══════════════════════════════════════');
-    console.log('🏴‍☠️           ONE PIECE XP BOT');
-    console.log('🏴‍☠️ ═══════════════════════════────');
-    console.log(`⚓ Logged in as ${client.user.tag}`);
-    console.log(`🏴‍☠️ Serving ${client.guilds.cache.size} server(s)`);
-    console.log(`🎯 Commands loaded: ${client.commands.size}`);
-    
-    const health = connectionManager.getHealthStatus();
-    console.log(`📊 PostgreSQL: ${health.postgresql.status}`);
-    console.log(`🔴 Redis: ${health.redis.status}`);
-    console.log(`💾 Cache: ${health.cache.type}`);
-    
-    console.log('🏴‍☠️ ═══════════════════════════════════════');
-    console.log('🎯 All systems operational!');
-    console.log('🏴‍☠️ ═══════════════════════════════════════');
-    
-    // Update cache stats display after bot is fully ready
-    setTimeout(async () => {
-        await displayCacheStats();
-    }, 10000); // Wait 10 seconds for systems to settle
-
-    // START CACHE PRELOADING SYSTEM
-    await startCachePreloading();
-});
-
-// Message event with ENHANCED DEBUG COMMANDS
-client.on('messageCreate', async (message) => {
-    if (message.author.bot || !message.guild) return;
-    
-    // Handle XP for messages
-    if (xpManager) {
-        await xpManager.handleMessageX
+// Start the bot
+startBot().catch(console.error);
