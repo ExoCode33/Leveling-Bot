@@ -21,18 +21,49 @@ module.exports = {
 
     async execute(interaction, { xpManager, databaseManager, cacheManager, connectionManager }) {
         try {
-            // Check channel restriction (admin can use anywhere)
-            if (interaction.user.id !== ADMIN_USER_ID && COMMANDS_CHANNEL && interaction.channel.id !== COMMANDS_CHANNEL) {
-                return await interaction.reply({
-                    content: `❌ **Channel Restriction**\n\nThis command can only be used in <#${COMMANDS_CHANNEL}>.`,
-                    ephemeral: true
-                });
+            // Check if this is a button interaction or regular slash command
+            const isButtonInteraction = interaction.isButton();
+            const isSlashCommand = interaction.isChatInputCommand();
+
+            if (!isButtonInteraction && !isSlashCommand) {
+                console.error('[LEADERBOARD] Unknown interaction type:', interaction.type);
+                return;
             }
 
-            const type = interaction.options.getString('type') || 'posters';
+            // Check channel restriction (admin can use anywhere)
+            if (interaction.user.id !== ADMIN_USER_ID && COMMANDS_CHANNEL && interaction.channel.id !== COMMANDS_CHANNEL) {
+                const errorMessage = `❌ **Channel Restriction**\n\nThis command can only be used in <#${COMMANDS_CHANNEL}>.`;
+                
+                if (isButtonInteraction) {
+                    return await interaction.update({
+                        content: errorMessage,
+                        embeds: [],
+                        components: []
+                    });
+                } else {
+                    return await interaction.reply({
+                        content: errorMessage,
+                        ephemeral: true
+                    });
+                }
+            }
 
-            // Defer reply early
-            await interaction.deferReply();
+            // Get type from button interaction or slash command
+            let type;
+            if (isButtonInteraction) {
+                type = interaction.customId.replace('leaderboard_', '');
+                console.log(`[LEADERBOARD] Button interaction for type: ${type}`);
+            } else {
+                type = interaction.options.getString('type') || 'posters';
+                console.log(`[LEADERBOARD] Slash command for type: ${type}`);
+            }
+
+            // Defer reply - handle both interaction types
+            if (isButtonInteraction) {
+                await interaction.deferUpdate();
+            } else {
+                await interaction.deferReply();
+            }
 
             // Get leaderboard data
             const leaderboardData = await xpManager.getLeaderboard(interaction.guild.id, 50);
@@ -43,7 +74,11 @@ module.exports = {
                     .setDescription('No pirates have earned bounties yet!')
                     .setColor('#FF6B35');
 
-                return await interaction.editReply({ embeds: [embed] });
+                if (isButtonInteraction) {
+                    return await interaction.editReply({ embeds: [embed], components: [] });
+                } else {
+                    return await interaction.editReply({ embeds: [embed] });
+                }
             }
 
             // Check for Pirate King
@@ -109,16 +144,16 @@ module.exports = {
 
             switch (type) {
                 case 'posters':
-                    await this.handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager);
+                    await this.handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager, isButtonInteraction);
                     break;
                 case 'long':
-                    await this.handleLongLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager);
+                    await this.handleLongLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager, isButtonInteraction);
                     break;
                 case 'full':
-                    await this.handleFullLeaderboard(interaction, pirateKing, filteredUsers, buttons);
+                    await this.handleFullLeaderboard(interaction, pirateKing, filteredUsers, buttons, isButtonInteraction);
                     break;
                 default:
-                    await this.handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager);
+                    await this.handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager, isButtonInteraction);
                     break;
             }
 
@@ -130,10 +165,16 @@ module.exports = {
                 .setDescription(`Failed to load leaderboard: ${error.message}`)
                 .setColor('#FF0000');
 
-            if (interaction.deferred) {
-                await interaction.editReply({ embeds: [errorEmbed], components: [] });
-            } else {
-                await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+            try {
+                if (interaction.deferred || interaction.replied) {
+                    await interaction.editReply({ embeds: [errorEmbed], components: [] });
+                } else if (interaction.isButton()) {
+                    await interaction.update({ embeds: [errorEmbed], components: [] });
+                } else {
+                    await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+                }
+            } catch (replyError) {
+                console.error('[ERROR] Failed to send error message:', replyError);
             }
         }
     },
@@ -141,7 +182,7 @@ module.exports = {
     /**
      * Handle Top 3 Bounties (with posters)
      */
-    async handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager) {
+    async handlePostersLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager, isButtonInteraction) {
         // Send header
         const headerEmbed = new EmbedBuilder()
             .setAuthor({ 
@@ -176,6 +217,8 @@ module.exports = {
             const rank = isPirateKingData ? 'PIRATE KING' : `RANK ${i + (pirateKing ? 0 : 1)}`;
             
             try {
+                console.log(`[LEADERBOARD] Generating poster ${i + 1}/${postersToShow.length} for user ${userData.userId}`);
+                
                 const canvas = await canvasGenerator.createWantedPoster(userData, interaction.guild);
                 const attachment = new AttachmentBuilder(canvas.toBuffer(), { name: `wanted_${userData.userId}.png` });
                 
@@ -219,14 +262,34 @@ module.exports = {
                 
                 await interaction.followUp(messageOptions);
                 
-                // Small delay between posters
+                console.log(`[LEADERBOARD] Successfully sent poster ${i + 1}/${postersToShow.length}`);
+                
+                // Small delay between posters to prevent rate limiting
                 if (i < postersToShow.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
                 
             } catch (error) {
-                console.error('[ERROR] Error creating poster:', error);
-                continue;
+                console.error(`[ERROR] Error creating poster for user ${userData.userId}:`, error);
+                
+                // Send error message for this specific poster
+                const errorEmbed = new EmbedBuilder()
+                    .setColor(0xFF0000)
+                    .setTitle('❌ Poster Generation Failed')
+                    .setDescription(`Failed to generate wanted poster for ${userData.member.displayName}\n\n**Error:** ${error.message}`)
+                    .addFields({
+                        name: '📊 Basic Info',
+                        value: `**Level:** ${userData.level}\n**Bounty:** ฿${userData.bounty.toLocaleString()}\n**Rank:** ${rank}`,
+                        inline: false
+                    });
+
+                const isLastPoster = (i === postersToShow.length - 1);
+                const messageOptions = { embeds: [errorEmbed] };
+                if (isLastPoster) {
+                    messageOptions.components = [buttons];
+                }
+                
+                await interaction.followUp(messageOptions);
             }
         }
     },
@@ -234,7 +297,7 @@ module.exports = {
     /**
      * Handle Top 10 Bounties (with posters)
      */
-    async handleLongLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager) {
+    async handleLongLeaderboard(interaction, pirateKing, filteredUsers, buttons, cacheManager, isButtonInteraction) {
         // Send header
         const headerEmbed = new EmbedBuilder()
             .setAuthor({ 
@@ -269,6 +332,8 @@ module.exports = {
             const rank = isPirateKingData ? 'PIRATE KING' : `RANK ${i + (pirateKing ? 0 : 1)}`;
             
             try {
+                console.log(`[LEADERBOARD] Generating poster ${i + 1}/${postersToShow.length} for user ${userData.userId}`);
+                
                 const canvas = await canvasGenerator.createWantedPoster(userData, interaction.guild);
                 const attachment = new AttachmentBuilder(canvas.toBuffer(), { name: `wanted_${userData.userId}.png` });
                 
@@ -312,14 +377,34 @@ module.exports = {
                 
                 await interaction.followUp(messageOptions);
                 
-                // Small delay between posters
+                console.log(`[LEADERBOARD] Successfully sent poster ${i + 1}/${postersToShow.length}`);
+                
+                // Small delay between posters to prevent rate limiting
                 if (i < postersToShow.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
                 
             } catch (error) {
-                console.error('[ERROR] Error creating poster:', error);
-                continue;
+                console.error(`[ERROR] Error creating poster for user ${userData.userId}:`, error);
+                
+                // Send error message for this specific poster
+                const errorEmbed = new EmbedBuilder()
+                    .setColor(0xFF0000)
+                    .setTitle('❌ Poster Generation Failed')
+                    .setDescription(`Failed to generate wanted poster for ${userData.member.displayName}\n\n**Error:** ${error.message}`)
+                    .addFields({
+                        name: '📊 Basic Info',
+                        value: `**Level:** ${userData.level}\n**Bounty:** ฿${userData.bounty.toLocaleString()}\n**Rank:** ${rank}`,
+                        inline: false
+                    });
+
+                const isLastPoster = (i === postersToShow.length - 1);
+                const messageOptions = { embeds: [errorEmbed] };
+                if (isLastPoster) {
+                    messageOptions.components = [buttons];
+                }
+                
+                await interaction.followUp(messageOptions);
             }
         }
     },
@@ -327,7 +412,7 @@ module.exports = {
     /**
      * Handle All Bounties (text only)
      */
-    async handleFullLeaderboard(interaction, pirateKing, filteredUsers, buttons) {
+    async handleFullLeaderboard(interaction, pirateKing, filteredUsers, buttons, isButtonInteraction) {
         const level1Plus = filteredUsers.filter(user => user.level >= 1);
         
         const embed = new EmbedBuilder()
