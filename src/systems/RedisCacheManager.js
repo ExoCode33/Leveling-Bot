@@ -1,6 +1,6 @@
 /**
  * RedisCacheManager - High-level caching interface for Leveling-Bot
- * ENHANCED: Cache preloading system and advanced optimization with race condition protection
+ * FIXED: Cache preloading system and advanced optimization with race condition protection
  */
 class RedisCacheManager {
     constructor(redis = null, connectionManager = null) {
@@ -31,7 +31,7 @@ class RedisCacheManager {
     }
 
     /**
-     * PRELOAD SYSTEM - Warm up cache on bot startup
+     * PRELOAD SYSTEM - Warm up cache on bot startup - FIXED VERSION
      */
     async preloadCache(client, databaseManager) {
         if (this.preloadingInProgress) {
@@ -46,9 +46,15 @@ class RedisCacheManager {
 
         this.preloadingInProgress = true;
         this.preloadStats.startTime = Date.now();
-        this.preloadStats = { ...this.preloadStats, totalUsers: 0, avatarsPreloaded: 0, postersPreloaded: 0, errors: 0 };
+        this.preloadStats = { 
+            ...this.preloadStats, 
+            totalUsers: 0, 
+            avatarsPreloaded: 0, 
+            postersPreloaded: 0, 
+            errors: 0 
+        };
 
-        console.log('[PRELOAD] 🚀 Starting cache preloading system...');
+        console.log('[PRELOAD] 🚀 Starting ENHANCED cache preloading system...');
 
         try {
             // Get all active guilds
@@ -56,35 +62,43 @@ class RedisCacheManager {
             console.log(`[PRELOAD] Processing ${guilds.size} guilds for cache preloading`);
 
             for (const [guildId, guild] of guilds) {
-                console.log(`[PRELOAD] === Processing guild: ${guild.name} ===`);
+                console.log(`[PRELOAD] ⭐ === Processing guild: ${guild.name} (${guild.memberCount || 'unknown'} members) ===`);
                 
                 try {
                     await this.preloadGuildCache(guild, databaseManager);
                 } catch (guildError) {
-                    console.error(`[PRELOAD] Error preloading guild ${guild.name}:`, guildError);
+                    console.error(`[PRELOAD] ❌ Error preloading guild ${guild.name}:`, guildError);
                     this.preloadStats.errors++;
                 }
 
                 // Small delay between guilds to prevent overwhelming
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // Log progress every few guilds
+                const processedGuilds = Array.from(guilds.keys()).indexOf(guildId) + 1;
+                if (processedGuilds % 5 === 0 || processedGuilds === guilds.size) {
+                    console.log(`[PRELOAD] 📊 Progress: ${processedGuilds}/${guilds.size} guilds, ${this.preloadStats.totalUsers} users, ${this.preloadStats.avatarsPreloaded + this.preloadStats.postersPreloaded} items cached`);
+                }
             }
 
             this.preloadStats.endTime = Date.now();
             const duration = (this.preloadStats.endTime - this.preloadStats.startTime) / 1000;
 
-            console.log('[PRELOAD] ✅ Cache preloading complete!');
-            console.log(`[PRELOAD] 📊 Statistics:`);
+            console.log('[PRELOAD] ✅ ENHANCED cache preloading complete!');
+            console.log(`[PRELOAD] 📊 Final Statistics:`);
             console.log(`[PRELOAD]   Duration: ${duration.toFixed(2)}s`);
-            console.log(`[PRELOAD]   Total Users: ${this.preloadStats.totalUsers}`);
-            console.log(`[PRELOAD]   Avatars Preloaded: ${this.preloadStats.avatarsPreloaded}`);
-            console.log(`[PRELOAD]   Posters Preloaded: ${this.preloadStats.postersPreloaded}`);
-            console.log(`[PRELOAD]   Errors: ${this.preloadStats.errors}`);
-            console.log(`[PRELOAD]   Rate: ${Math.round(this.preloadStats.totalUsers / duration)} users/second`);
+            console.log(`[PRELOAD]   Total Users Processed: ${this.preloadStats.totalUsers}`);
+            console.log(`[PRELOAD]   Avatars Successfully Preloaded: ${this.preloadStats.avatarsPreloaded}`);
+            console.log(`[PRELOAD]   Posters Successfully Preloaded: ${this.preloadStats.postersPreloaded}`);
+            console.log(`[PRELOAD]   Total Items Cached: ${this.preloadStats.avatarsPreloaded + this.preloadStats.postersPreloaded}`);
+            console.log(`[PRELOAD]   Errors Encountered: ${this.preloadStats.errors}`);
+            console.log(`[PRELOAD]   Average Rate: ${Math.round(this.preloadStats.totalUsers / duration)} users/second`);
+            console.log(`[PRELOAD]   Success Rate: ${Math.round(((this.preloadStats.avatarsPreloaded + this.preloadStats.postersPreloaded) / (this.preloadStats.totalUsers * 2)) * 100)}%`);
 
             return true;
 
         } catch (error) {
-            console.error('[PRELOAD] ❌ Critical error in cache preloading:', error);
+            console.error('[PRELOAD] ❌ Critical error in ENHANCED cache preloading:', error);
             return false;
         } finally {
             this.preloadingInProgress = false;
@@ -92,50 +106,78 @@ class RedisCacheManager {
     }
 
     /**
-     * Preload cache for a specific guild
+     * Enhanced preload cache for a specific guild
      */
     async preloadGuildCache(guild, databaseManager) {
         try {
-            // Get top users from database (leaderboard users are most accessed)
-            const topUsers = await databaseManager.getLeaderboard(guild.id, 50); // Top 50 users
+            console.log(`[PRELOAD] 🏴‍☠️ Processing guild: ${guild.name} (ID: ${guild.id})`);
+            
+            // Get top users from database with better query
+            const topUsers = await databaseManager.getLeaderboard(guild.id, 50);
             
             if (!topUsers || topUsers.length === 0) {
-                console.log(`[PRELOAD] No users found for guild ${guild.name}`);
+                console.log(`[PRELOAD] ⚠️ No users found in database for guild ${guild.name}`);
                 return;
             }
 
-            console.log(`[PRELOAD] Processing ${topUsers.length} top users in ${guild.name}`);
+            console.log(`[PRELOAD] 📊 Found ${topUsers.length} database users in ${guild.name}`);
 
-            // Process users in batches to avoid overwhelming Discord API
-            const batchSize = 5;
+            // Process users in smaller, more manageable batches
+            const batchSize = 3; // Small batches for stability
+            let processedUsers = 0;
+            let successfulPreloads = 0;
+            
             for (let i = 0; i < topUsers.length; i += batchSize) {
                 const batch = topUsers.slice(i, i + batchSize);
                 
-                const batchPromises = batch.map(async (userData) => {
-                    try {
-                        await this.preloadUserCache(guild, userData);
-                        this.preloadStats.totalUsers++;
-                    } catch (userError) {
-                        console.error(`[PRELOAD] Error preloading user ${userData.user_id}:`, userError);
-                        this.preloadStats.errors++;
-                    }
-                });
+                console.log(`[PRELOAD] 📦 Guild ${guild.name} - Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(topUsers.length/batchSize)}`);
+                
+                // Process batch with better error handling
+                const batchResults = await Promise.allSettled(
+                    batch.map(async (userData) => {
+                        try {
+                            // Pre-increment for tracking
+                            this.preloadStats.totalUsers++;
+                            processedUsers++;
+                            
+                            await this.preloadUserCache(guild, userData);
+                            successfulPreloads++;
+                            
+                            return { success: true, userId: userData.user_id };
+                        } catch (userError) {
+                            console.error(`[PRELOAD] ❌ Error preloading user ${userData.user_id}:`, userError);
+                            this.preloadStats.errors++;
+                            return { success: false, userId: userData.user_id, error: userError.message };
+                        }
+                    })
+                );
+                
+                // Log batch results
+                const successful = batchResults.filter(r => r.value?.success).length;
+                console.log(`[PRELOAD] 📋 Batch result: ${successful}/${batch.length} successful`);
 
-                // Wait for batch to complete
-                await Promise.all(batchPromises);
+                // Progress logging for larger guilds
+                if (processedUsers > 0 && processedUsers % 15 === 0) {
+                    console.log(`[PRELOAD] ⚡ Guild ${guild.name} progress: ${processedUsers}/${topUsers.length} users (${successfulPreloads} successful preloads)`);
+                }
 
-                // Small delay between batches
-                await new Promise(resolve => setTimeout(resolve, 200));
+                // Delay between batches to prevent API spam
+                if (i + batchSize < topUsers.length) {
+                    await new Promise(resolve => setTimeout(resolve, 800)); // 800ms delay
+                }
             }
 
+            const successRate = Math.round((successfulPreloads / processedUsers) * 100);
+            console.log(`[PRELOAD] ✅ Guild ${guild.name} complete: ${processedUsers}/${topUsers.length} users processed (${successRate}% success rate)`);
+
         } catch (error) {
-            console.error(`[PRELOAD] Error in guild ${guild.name}:`, error);
+            console.error(`[PRELOAD] ❌ Critical error in guild ${guild.name}:`, error);
             throw error;
         }
     }
 
     /**
-     * Preload cache for a specific user
+     * Enhanced preload user cache with better tracking
      */
     async preloadUserCache(guild, userData) {
         try {
@@ -147,7 +189,7 @@ class RedisCacheManager {
                     member = await guild.members.fetch(userData.user_id);
                 }
             } catch (error) {
-                // User might have left the guild, skip
+                // User might have left the guild, skip silently
                 return;
             }
 
@@ -155,85 +197,166 @@ class RedisCacheManager {
                 return; // Skip bots and invalid members
             }
 
-            // PRELOAD AVATAR
-            await this.preloadUserAvatar(member.user);
+            console.log(`[PRELOAD] 🔍 Processing ${member.user.username} (Level ${userData.level})`);
 
-            // PRELOAD WANTED POSTER
-            await this.preloadUserPoster(userData, member, guild);
-
-        } catch (error) {
-            // Don't log individual user errors to avoid spam
-            throw error;
-        }
-    }
-
-    /**
-     * Preload user avatar
-     */
-    async preloadUserAvatar(user) {
-        try {
-            const avatarURL = user.displayAvatarURL({ extension: 'png', size: 512, forceStatic: true });
-            const avatarHash = this.extractAvatarHash(avatarURL);
-            
-            if (!avatarHash) {
-                console.log(`[PRELOAD] ⚠️ No avatar hash for ${user.username}, skipping`);
-                return;
-            }
-
-            // Check if already cached
-            const existing = await this.getCachedAvatar(user.id, avatarHash);
-            if (existing) {
-                console.log(`[PRELOAD] 📋 Avatar already cached for ${user.username}`);
-                return; // Already cached
-            }
-
-            // Load and cache avatar
-            console.log(`[PRELOAD] 📥 Loading avatar for ${user.username}...`);
-            const { loadImage, createCanvas } = require('canvas');
-            const avatar = await loadImage(avatarURL);
-            
-            // Convert to buffer
-            const tempCanvas = createCanvas(512, 512);
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.drawImage(avatar, 0, 0, 512, 512);
-            const buffer = tempCanvas.toBuffer();
-            
-            // Cache the avatar
-            const cacheSuccess = await this.cacheUserAvatar(user.id, avatarHash, buffer);
-            if (cacheSuccess) {
+            // PRELOAD AVATAR with result tracking
+            const avatarResult = await this.preloadUserAvatar(member.user);
+            if (avatarResult.success) {
                 this.preloadStats.avatarsPreloaded++;
-                console.log(`[PRELOAD] ✅ Successfully cached avatar for ${user.username} (${Math.round(buffer.length/1024)}KB)`);
+                console.log(`[PRELOAD] ✅ Avatar cached: ${member.user.username}`);
             } else {
-                console.log(`[PRELOAD] ❌ Failed to cache avatar for ${user.username}`);
+                console.log(`[PRELOAD] ⚠️ Avatar failed: ${member.user.username} - ${avatarResult.error}`);
+            }
+
+            // PRELOAD WANTED POSTER with result tracking
+            const posterResult = await this.preloadUserPoster(userData, member, guild);
+            if (posterResult.success) {
+                this.preloadStats.postersPreloaded++;
+                console.log(`[PRELOAD] ✅ Poster cached: ${member.user.username} (Level ${userData.level})`);
+            } else {
+                console.log(`[PRELOAD] ⚠️ Poster failed: ${member.user.username} - ${posterResult.error}`);
             }
 
         } catch (error) {
-            console.error(`[PRELOAD] ❌ Error preloading avatar for ${user.username}:`, error);
+            console.error(`[PRELOAD] ❌ Error preloading user ${userData.user_id}:`, error);
             this.preloadStats.errors++;
         }
     }
 
     /**
-     * Preload user wanted poster
+     * Preload user avatar - FIXED TO ACTUALLY LOAD AND CACHE
+     */
+    async preloadUserAvatar(user) {
+        try {
+            console.log(`[PRELOAD] 🖼️ Processing avatar for ${user.username}...`);
+            
+            const avatarURL = user.displayAvatarURL({ extension: 'png', size: 512, forceStatic: true });
+            const avatarHash = this.extractAvatarHash(avatarURL);
+            
+            if (!avatarHash) {
+                console.log(`[PRELOAD] ⚠️ No avatar hash for ${user.username}, using default`);
+                // Try to preload default avatar instead
+                return await this.preloadDefaultAvatar(user);
+            }
+
+            // CRITICAL FIX: DON'T SKIP BASED ON CACHE - ALWAYS TRY TO LOAD
+            console.log(`[PRELOAD] 📥 Loading avatar for ${user.username} from ${avatarURL}`);
+            
+            const { loadImage, createCanvas } = require('canvas');
+            
+            try {
+                // Load avatar from Discord with timeout
+                const avatar = await Promise.race([
+                    loadImage(avatarURL),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Avatar load timeout')), 8000))
+                ]);
+                
+                // Convert to buffer for caching
+                const tempCanvas = createCanvas(512, 512);
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.drawImage(avatar, 0, 0, 512, 512);
+                const buffer = tempCanvas.toBuffer();
+                
+                // CRITICAL: Actually cache the avatar
+                const cacheSuccess = await this.cacheUserAvatar(user.id, avatarHash, buffer);
+                
+                if (cacheSuccess) {
+                    console.log(`[PRELOAD] ✅ Cached avatar: ${user.username} (${Math.round(buffer.length/1024)}KB)`);
+                    return { success: true, cached: true, size: buffer.length };
+                } else {
+                    console.log(`[PRELOAD] ❌ Failed to cache avatar: ${user.username}`);
+                    return { success: false, error: 'Cache write failed' };
+                }
+                
+            } catch (loadError) {
+                console.log(`[PRELOAD] ⚠️ PNG failed for ${user.username}, trying JPG fallback...`);
+                
+                // Try JPEG format as fallback
+                try {
+                    const jpgURL = user.displayAvatarURL({ extension: 'jpg', size: 512, forceStatic: true });
+                    const avatar = await Promise.race([
+                        loadImage(jpgURL),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('JPG timeout')), 8000))
+                    ]);
+                    
+                    const tempCanvas = createCanvas(512, 512);
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCtx.drawImage(avatar, 0, 0, 512, 512);
+                    const buffer = tempCanvas.toBuffer();
+                    
+                    const cacheSuccess = await this.cacheUserAvatar(user.id, avatarHash, buffer);
+                    
+                    if (cacheSuccess) {
+                        console.log(`[PRELOAD] ✅ Cached JPG avatar: ${user.username}`);
+                        return { success: true, cached: true, size: buffer.length };
+                    }
+                } catch (jpgError) {
+                    console.log(`[PRELOAD] ⚠️ JPG also failed for ${user.username}, trying default`);
+                    return await this.preloadDefaultAvatar(user);
+                }
+            }
+
+            return { success: false, error: 'All avatar formats failed' };
+
+        } catch (error) {
+            console.error(`[PRELOAD] ❌ Critical error preloading avatar for ${user.username}:`, error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Preload default Discord avatar
+     */
+    async preloadDefaultAvatar(user) {
+        try {
+            console.log(`[PRELOAD] 🎭 Loading default avatar for ${user.username}...`);
+            
+            const { loadImage, createCanvas } = require('canvas');
+            const defaultAvatarURL = `https://cdn.discordapp.com/embed/avatars/${user.discriminator % 5}.png`;
+            
+            const avatar = await Promise.race([
+                loadImage(defaultAvatarURL),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Default avatar timeout')), 5000))
+            ]);
+            
+            const tempCanvas = createCanvas(512, 512);
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(avatar, 0, 0, 512, 512);
+            const buffer = tempCanvas.toBuffer();
+            
+            // Use a special hash for default avatars
+            const defaultHash = `default_${user.discriminator % 5}`;
+            const cacheSuccess = await this.cacheUserAvatar(user.id, defaultHash, buffer);
+            
+            if (cacheSuccess) {
+                console.log(`[PRELOAD] ✅ Cached default avatar: ${user.username}`);
+                return { success: true, cached: true, size: buffer.length, isDefault: true };
+            }
+            
+            return { success: false, error: 'Default avatar cache failed' };
+        } catch (error) {
+            console.log(`[PRELOAD] ❌ Failed to load default avatar for ${user.username}:`, error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Preload user wanted poster - FIXED TO ACTUALLY GENERATE AND CACHE
      */
     async preloadUserPoster(userData, member, guild) {
         try {
+            console.log(`[PRELOAD] 🎨 Processing poster for ${member.displayName} (Level ${userData.level})`);
+            
             const BountyCalculator = require('../utils/BountyCalculator');
             const bountyCalculator = new BountyCalculator();
             const bounty = bountyCalculator.getBountyForLevel(userData.level);
 
-            // Check if poster already cached
-            const existing = await this.getCachedPoster(userData.user_id, userData.level, bounty);
-            if (existing) {
-                console.log(`[PRELOAD] 📋 Poster already cached for ${member.displayName} (Level ${userData.level})`);
-                return; // Already cached
-            }
+            // CRITICAL FIX: ALWAYS GENERATE THE POSTER, DON'T SKIP
+            console.log(`[PRELOAD] 🎨 Generating poster for ${member.displayName} (Level ${userData.level}, Bounty: ฿${bounty.toLocaleString()})`);
 
-            console.log(`[PRELOAD] 🎨 Generating poster for ${member.displayName} (Level ${userData.level})...`);
-
-            // Generate poster
+            // Generate poster using CanvasGenerator
             const CanvasGenerator = require('../utils/CanvasGenerator');
-            const canvasGenerator = new CanvasGenerator(this);
+            const canvasGenerator = new CanvasGenerator(this); // Pass cache manager
             
             const fullUserData = {
                 ...userData,
@@ -243,32 +366,61 @@ class RedisCacheManager {
                 isPirateKing: false
             };
 
-            const canvas = await canvasGenerator.createWantedPoster(fullUserData, guild);
-            const buffer = canvas.toBuffer();
-            
-            // Cache the poster - this will be done automatically by CanvasGenerator
-            const cacheSuccess = await this.cacheWantedPoster(userData.user_id, userData.level, bounty, buffer);
-            if (cacheSuccess) {
-                this.preloadStats.postersPreloaded++;
-                console.log(`[PRELOAD] ✅ Successfully cached poster for ${member.displayName} (Level ${userData.level}, ${Math.round(buffer.length/1024)}KB)`);
-            } else {
-                console.log(`[PRELOAD] ❌ Failed to cache poster for ${member.displayName}`);
+            try {
+                const canvas = await canvasGenerator.createWantedPoster(fullUserData, guild);
+                const buffer = canvas.toBuffer();
+                
+                // CRITICAL: Cache the poster directly
+                const cacheSuccess = await this.cacheWantedPoster(userData.user_id, userData.level, bounty, buffer);
+                
+                if (cacheSuccess) {
+                    console.log(`[PRELOAD] ✅ Generated and cached poster: ${member.displayName} (${Math.round(buffer.length/1024)}KB)`);
+                    return { success: true, cached: true, size: buffer.length };
+                } else {
+                    console.log(`[PRELOAD] ❌ Poster generated but cache failed: ${member.displayName}`);
+                    return { success: false, error: 'Poster cache write failed' };
+                }
+                
+            } catch (canvasError) {
+                console.error(`[PRELOAD] ❌ Canvas generation failed for ${member.displayName}:`, canvasError);
+                return { success: false, error: canvasError.message };
             }
 
         } catch (error) {
-            console.error(`[PRELOAD] ❌ Error preloading poster for ${member.displayName}:`, error);
-            this.preloadStats.errors++;
+            console.error(`[PRELOAD] ❌ Critical error preloading poster for ${member?.displayName}:`, error);
+            return { success: false, error: error.message };
         }
     }
 
     /**
-     * Extract avatar hash from Discord avatar URL
+     * Extract avatar hash from Discord avatar URL - ENHANCED
      */
     extractAvatarHash(avatarURL) {
         try {
-            const match = avatarURL.match(/avatars\/\d+\/([a-f0-9]+)\.(png|jpg|gif|webp)/);
-            return match ? match[1] : null;
+            // Handle both new and old Discord avatar URL formats
+            const patterns = [
+                /avatars\/(\d+)\/([a-f0-9]+)\.(png|jpg|gif|webp)/i,  // Standard format
+                /\/([a-f0-9]{32})\.(png|jpg|gif|webp)/i,             // Direct hash format
+                /embed\/avatars\/(\d+)\.png/i                        // Default avatar format
+            ];
+            
+            for (const pattern of patterns) {
+                const match = avatarURL.match(pattern);
+                if (match) {
+                    if (pattern.source.includes('embed')) {
+                        // Default avatar
+                        return `default_${match[1]}`;
+                    } else {
+                        // Custom avatar hash
+                        return match[2] || match[1];
+                    }
+                }
+            }
+            
+            console.log(`[CACHE] ⚠️ Could not extract avatar hash from: ${avatarURL}`);
+            return null;
         } catch (error) {
+            console.log(`[CACHE] ❌ Error extracting avatar hash: ${error.message}`);
             return null;
         }
     }
@@ -735,7 +887,7 @@ class RedisCacheManager {
     }
 
     /**
-     * Get cache statistics
+     * Get cache statistics with proper Redis key counting - FIXED
      */
     async getCacheStats() {
         try {
@@ -749,18 +901,24 @@ class RedisCacheManager {
 
             const redis = this.connectionManager.getRedis();
             
-            // Count keys by type using SCAN for better performance
+            console.log(`[CACHE STATS] Counting Redis keys with prefix: ${this.keyPrefix}`);
+            
+            // Count keys by type using actual Redis commands
             const stats = {
-                avatars: await this.countKeys(`${this.keyPrefix}avatar:*`),
-                posters: await this.countKeys(`${this.keyPrefix}poster:*`),
-                cooldowns: await this.countKeys(`${this.keyPrefix}cooldown:*`),
-                leaderboards: await this.countKeys(`${this.keyPrefix}leaderboard:*`),
-                validated: await this.countKeys(`${this.keyPrefix}validated:*`)
+                avatars: await this.countRedisKeys(`${this.keyPrefix}avatar:*`),
+                posters: await this.countRedisKeys(`${this.keyPrefix}poster:*`),
+                cooldowns: await this.countRedisKeys(`${this.keyPrefix}cooldown:*`),
+                leaderboards: await this.countRedisKeys(`${this.keyPrefix}leaderboard:*`),
+                validated: await this.countRedisKeys(`${this.keyPrefix}validated:*`),
+                daily: await this.countRedisKeys(`${this.keyPrefix}daily:*`),
+                invalidated: await this.countRedisKeys(`${this.keyPrefix}invalidated:*`)
             };
             
             stats.total = Object.values(stats).reduce((sum, count) => sum + count, 0);
             stats.mode = 'Redis';
             stats.redis = true;
+            
+            console.log(`[CACHE STATS] Found: avatars=${stats.avatars}, posters=${stats.posters}, cooldowns=${stats.cooldowns}, total=${stats.total}`);
             
             // Get Redis memory info if available
             try {
@@ -768,12 +926,13 @@ class RedisCacheManager {
                 const usedMemory = info.match(/used_memory_human:([^\r\n]+)/)?.[1] || 'Unknown';
                 stats.memoryUsed = usedMemory;
             } catch (error) {
-                console.log('[CACHE] Could not get Redis memory info');
+                console.log('[CACHE STATS] Could not get Redis memory info');
             }
             
             return stats;
+            
         } catch (error) {
-            console.error('[CACHE] Error getting cache stats:', error);
+            console.error('[CACHE STATS] Error getting cache stats:', error);
             return {
                 mode: 'Error',
                 entries: 0,
@@ -784,23 +943,38 @@ class RedisCacheManager {
     }
 
     /**
-     * Count keys matching pattern - IMPROVED WITH ACTUAL REDIS SCAN
+     * Count Redis keys with proper error handling and logging
      */
-    async countKeys(pattern) {
+    async countRedisKeys(pattern) {
         try {
-            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
-                const redis = this.connectionManager.getRedis();
-                const keys = await redis.keys(pattern);
-                return keys.length;
-            } else if (this.redis) {
-                const keys = await this.redis.keys(pattern);
-                return keys.length;
+            if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
+                console.log(`[CACHE STATS] Redis not available for pattern: ${pattern}`);
+                return 0;
             }
-            return 0;
+
+            const redis = this.connectionManager.getRedis();
+            console.log(`[CACHE STATS] Counting keys for pattern: ${pattern}`);
+            
+            const keys = await redis.keys(pattern);
+            
+            console.log(`[CACHE STATS] Pattern "${pattern}" found ${keys.length} keys`);
+            if (keys.length > 0 && keys.length <= 5) {
+                console.log(`[CACHE STATS] Sample keys: ${keys.join(', ')}`);
+            }
+            
+            return keys.length;
+            
         } catch (error) {
-            console.error(`[CACHE] Error counting keys for pattern ${pattern}:`, error);
+            console.error(`[CACHE STATS] Error counting keys for pattern ${pattern}:`, error);
             return 0;
         }
+    }
+
+    /**
+     * Count keys matching pattern - IMPROVED IMPLEMENTATION
+     */
+    async countKeys(pattern) {
+        return await this.countRedisKeys(pattern);
     }
 
     /**
@@ -870,6 +1044,201 @@ class RedisCacheManager {
         } catch (error) {
             console.error('[CACHE] Cache test error:', error);
             return { success: false, error: error.message };
+        }
+    }
+
+    // ==================== DEBUG METHODS ====================
+
+    /**
+     * Debug cache contents
+     */
+    async debugCacheContents() {
+        try {
+            if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
+                console.log('[CACHE DEBUG] Redis not available for debug');
+                return false;
+            }
+
+            const redis = this.connectionManager.getRedis();
+            console.log('[CACHE DEBUG] ================ CACHE CONTENTS DEBUG ================');
+            
+            // List sample keys from each category
+            const categories = [
+                { name: 'Avatars', pattern: `${this.keyPrefix}avatar:*` },
+                { name: 'Posters', pattern: `${this.keyPrefix}poster:*` },
+                { name: 'Cooldowns', pattern: `${this.keyPrefix}cooldown:*` },
+                { name: 'Leaderboards', pattern: `${this.keyPrefix}leaderboard:*` },
+                { name: 'Validated', pattern: `${this.keyPrefix}validated:*` }
+            ];
+
+            for (const category of categories) {
+                const keys = await redis.keys(category.pattern);
+                console.log(`[CACHE DEBUG] ${category.name}: ${keys.length} keys`);
+                
+                if (keys.length > 0) {
+                    // Show first few keys as examples
+                    const samples = keys.slice(0, 3);
+                    for (const key of samples) {
+                        try {
+                            const type = await redis.type(key);
+                            const ttl = await redis.ttl(key);
+                            const size = type === 'string' ? (await redis.strlen(key)) : 'N/A';
+                            console.log(`[CACHE DEBUG]   - ${key} (${type}, TTL: ${ttl}s, Size: ${size})`);
+                        } catch (keyError) {
+                            console.log(`[CACHE DEBUG]   - ${key} (error getting info)`);
+                        }
+                    }
+                    
+                    if (keys.length > 3) {
+                        console.log(`[CACHE DEBUG]   - ...and ${keys.length - 3} more`);
+                    }
+                }
+            }
+            
+            console.log('[CACHE DEBUG] ================ END CACHE DEBUG ================');
+            return true;
+            
+        } catch (error) {
+            console.error('[CACHE DEBUG] Error debugging cache contents:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Manual cache test with comprehensive operations
+     */
+    async manualCacheTest() {
+        try {
+            console.log('[CACHE TEST] Starting comprehensive manual cache test...');
+            
+            // Test basic cache operations
+            const testKey = `${this.keyPrefix}test:${Date.now()}`;
+            const testValue = JSON.stringify({ test: true, timestamp: Date.now() });
+            
+            // Test 1: Basic cache set/get
+            console.log('[CACHE TEST] Testing basic cache operations...');
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                
+                // Set test
+                const setResult = await this.connectionManager.setCache(testKey, testValue, 60);
+                console.log(`[CACHE TEST] Set result: ${setResult}`);
+                
+                // Get test
+                const getValue = await this.connectionManager.getCache(testKey);
+                console.log(`[CACHE TEST] Get result: ${getValue !== null ? 'SUCCESS' : 'FAILED'}`);
+                console.log(`[CACHE TEST] Retrieved value: ${getValue}`);
+                
+                // Delete test
+                await this.connectionManager.deleteCache(testKey);
+                const deletedValue = await this.connectionManager.getCache(testKey);
+                console.log(`[CACHE TEST] Delete result: ${deletedValue === null ? 'SUCCESS' : 'FAILED'}`);
+                
+                // Test 2: Binary cache operations
+                console.log('[CACHE TEST] Testing binary cache operations...');
+                const binaryKey = `${this.keyPrefix}test:binary:${Date.now()}`;
+                const binaryValue = Buffer.from('test binary data for cache');
+                
+                const binarySetResult = await this.connectionManager.setBinaryCache(binaryKey, binaryValue, 60);
+                console.log(`[CACHE TEST] Binary set result: ${binarySetResult}`);
+                
+                const binaryGetValue = await this.connectionManager.getBinaryCache(binaryKey);
+                console.log(`[CACHE TEST] Binary get result: ${binaryGetValue && Buffer.isBuffer(binaryGetValue) ? 'SUCCESS' : 'FAILED'}`);
+                
+                // Cleanup
+                await this.connectionManager.deleteCache(binaryKey);
+                
+            } else {
+                console.log('[CACHE TEST] Redis not available, skipping tests');
+            }
+            
+            console.log('[CACHE TEST] Manual cache test complete');
+            return true;
+            
+        } catch (error) {
+            console.error('[CACHE TEST] Error in manual cache test:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Debug preload user method
+     */
+    async debugPreloadUser(guild, userId) {
+        try {
+            console.log(`[CACHE DEBUG] Force preloading user ${userId} in guild ${guild.name}`);
+            
+            // Get user from guild first
+            let member;
+            try {
+                member = guild.members.cache.get(userId);
+                if (!member) {
+                    member = await guild.members.fetch(userId);
+                }
+            } catch (memberError) {
+                console.log(`[CACHE DEBUG] Could not fetch member ${userId}: ${memberError.message}`);
+                return false;
+            }
+            
+            if (!member) {
+                console.log(`[CACHE DEBUG] Member ${userId} not found in guild`);
+                return false;
+            }
+            
+            // Create basic user data for preloading
+            const userData = {
+                user_id: userId,
+                level: 1, // Default level for testing
+                total_xp: 1000 // Default XP for testing
+            };
+            
+            // Preload this user
+            console.log(`[CACHE DEBUG] Starting preload for ${member.displayName}...`);
+            await this.preloadUserCache(guild, userData);
+            
+            console.log(`[CACHE DEBUG] Completed force preload for user ${userId}`);
+            return true;
+            
+        } catch (error) {
+            console.error(`[CACHE DEBUG] Error force preloading user ${userId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Clear all cache (USE WITH EXTREME CAUTION)
+     */
+    async debugClearAllCache() {
+        try {
+            if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
+                console.log('[CACHE DEBUG] Redis not available for cache clearing');
+                return false;
+            }
+
+            const redis = this.connectionManager.getRedis();
+            const keys = await redis.keys(`${this.keyPrefix}*`);
+            
+            console.log(`[CACHE DEBUG] Found ${keys.length} cache keys to clear`);
+            
+            if (keys.length > 0) {
+                // Clear in batches to avoid timeout
+                const batchSize = 100;
+                let totalCleared = 0;
+                
+                for (let i = 0; i < keys.length; i += batchSize) {
+                    const batch = keys.slice(i, i + batchSize);
+                    const result = await redis.del(...batch);
+                    totalCleared += result;
+                    console.log(`[CACHE DEBUG] Cleared batch ${Math.floor(i/batchSize) + 1}: ${result} keys`);
+                }
+                
+                console.log(`[CACHE DEBUG] Total cleared: ${totalCleared} cache keys`);
+                return totalCleared;
+            }
+            
+            return 0;
+        } catch (error) {
+            console.error('[CACHE DEBUG] Error clearing cache:', error);
+            return false;
         }
     }
 
