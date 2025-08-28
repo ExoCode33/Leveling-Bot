@@ -1,7 +1,7 @@
 {
   "name": "one-piece-xp-bot",
-  "version": "3.0.0",
-  "description": "Clean One Piece themed XP tracking bot with canvas generation and Redis caching",
+  "version": "3.1.0",
+  "description": "Clean One Piece themed XP tracking bot with canvas generation, Redis caching, and automatic database maintenance",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -14,7 +14,11 @@
     "redis:test": "redis-cli ping",
     "redis:stop": "redis-cli shutdown",
     "cache:stats": "node scripts/cache-stats.js",
-    "health": "node scripts/health-check.js"
+    "health": "node scripts/health-check.js",
+    "maintenance": "node scripts/database-maintenance.js run",
+    "maintenance:dry-run": "node scripts/database-maintenance.js dry-run",
+    "cleanup": "node scripts/database-maintenance.js run",
+    "cleanup:preview": "node scripts/database-maintenance.js dry-run"
   },
   "keywords": [
     "discord",
@@ -24,7 +28,8 @@
     "one-piece",
     "canvas",
     "redis",
-    "caching"
+    "caching",
+    "database-maintenance"
   ],
   "author": "ExoCode",
   "license": "MIT",
