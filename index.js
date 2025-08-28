@@ -223,7 +223,7 @@ async function startCachePreloading() {
 client.once('clientReady', async () => {
     console.log('🏴‍☠️ ═══════════════════════════════════════');
     console.log('🏴‍☠️           ONE PIECE XP BOT');
-    console.log('🏴‍☠️ ═══════════════════════════────');
+    console.log('🏴‍☠️ ═══════════════════════────');
     console.log(`⚓ Logged in as ${client.user.tag}`);
     console.log(`🏴‍☠️ Serving ${client.guilds.cache.size} server(s)`);
     console.log(`🎯 Commands loaded: ${client.commands.size}`);
@@ -287,6 +287,236 @@ client.on('messageCreate', async (message) => {
         
         await message.reply({ embeds: [embed] });
     }
+
+    // ==================== NEW REDIS DEBUG COMMANDS ====================
+    
+    // Debug command to check actual Redis keys
+    if (message.content === '!rediskeys' && message.author.id === process.env.ADMIN_USER_ID) {
+        try {
+            await message.reply('🔍 Checking actual Redis keys...');
+            
+            if (!connectionManager || !connectionManager.isRedisAvailable()) {
+                return await message.reply('❌ Redis not available');
+            }
+            
+            const redis = connectionManager.getRedis();
+            
+            // Get ALL keys in Redis (not just bot keys)
+            const allKeys = await redis.keys('*');
+            console.log(`[REDIS DEBUG] Found ${allKeys.length} total keys in Redis`);
+            
+            // Show first 20 keys for debugging
+            const sampleKeys = allKeys.slice(0, 20);
+            console.log('[REDIS DEBUG] Sample keys:', sampleKeys);
+            
+            // Check for Leveling-Bot prefixed keys
+            const botKeys = await redis.keys('Leveling-Bot:*');
+            console.log(`[REDIS DEBUG] Found ${botKeys.length} Leveling-Bot keys`);
+            
+            // Check for other common prefixes
+            const prefixChecks = [
+                'leveling-bot:*',
+                'levelingbot:*',
+                'bot:*',
+                'xp:*',
+                'cache:*',
+                'discord:*'
+            ];
+            
+            for (const prefix of prefixChecks) {
+                const keys = await redis.keys(prefix);
+                if (keys.length > 0) {
+                    console.log(`[REDIS DEBUG] Found ${keys.length} keys with prefix "${prefix.replace('*', '')}"`);
+                    console.log(`[REDIS DEBUG] Sample: ${keys.slice(0, 3)}`);
+                }
+            }
+            
+            const embed = {
+                color: 0x4A90E2,
+                title: '🔍 Redis Keys Debug',
+                description: '```diff\n+ REDIS KEY ANALYSIS\n```',
+                fields: [
+                    {
+                        name: '📊 Key Counts',
+                        value: `**Total Keys:** ${allKeys.length}\n**Leveling-Bot Keys:** ${botKeys.length}`,
+                        inline: false
+                    },
+                    {
+                        name: '🔍 Sample Keys (First 10)',
+                        value: sampleKeys.slice(0, 10).map(key => `\`${key}\``).join('\n') || 'No keys found',
+                        inline: false
+                    }
+                ],
+                footer: { text: 'Check console for detailed analysis' }
+            };
+            
+            await message.reply({ embeds: [embed] });
+            
+        } catch (error) {
+            await message.reply(`❌ Redis debug error: ${error.message}`);
+        }
+    }
+
+    // Debug command to check what patterns the bot is searching for
+    if (message.content === '!cachepatterns' && message.author.id === process.env.ADMIN_USER_ID) {
+        try {
+            await message.reply('🔍 Checking bot cache search patterns...');
+            
+            if (!cacheManager) {
+                return await message.reply('❌ Cache manager not available');
+            }
+            
+            const keyPrefix = cacheManager.keyPrefix || 'Leveling-Bot:';
+            
+            console.log('[CACHE DEBUG] Bot is using key prefix:', keyPrefix);
+            
+            // Test the exact patterns the bot searches for
+            const patterns = [
+                `${keyPrefix}avatar:*`,
+                `${keyPrefix}poster:*`,
+                `${keyPrefix}cooldown:*`,
+                `${keyPrefix}leaderboard:*`,
+                `${keyPrefix}validated:*`
+            ];
+            
+            const embed = {
+                color: 0x4A90E2,
+                title: '🔍 Bot Cache Patterns',
+                description: '```diff\n+ BOT SEARCH PATTERNS\n```',
+                fields: [
+                    {
+                        name: '🏷️ Key Prefix',
+                        value: `\`${keyPrefix}\``,
+                        inline: false
+                    },
+                    {
+                        name: '🔍 Search Patterns',
+                        value: patterns.map(p => `\`${p}\``).join('\n'),
+                        inline: false
+                    }
+                ],
+                footer: { text: 'These are the patterns the bot searches for' }
+            };
+            
+            await message.reply({ embeds: [embed] });
+            
+        } catch (error) {
+            await message.reply(`❌ Pattern debug error: ${error.message}`);
+        }
+    }
+
+    // Debug command to manually check pattern matching
+    if (message.content === '!testpatterns' && message.author.id === process.env.ADMIN_USER_ID) {
+        try {
+            await message.reply('🧪 Testing pattern matching...');
+            
+            if (!connectionManager || !connectionManager.isRedisAvailable()) {
+                return await message.reply('❌ Redis not available');
+            }
+            
+            const redis = connectionManager.getRedis();
+            const keyPrefix = cacheManager?.keyPrefix || 'Leveling-Bot:';
+            
+            // Test each pattern individually
+            const testResults = [];
+            
+            const patterns = [
+                `${keyPrefix}avatar:*`,
+                `${keyPrefix}poster:*`,
+                `${keyPrefix}cooldown:*`,
+                `${keyPrefix}leaderboard:*`,
+                `${keyPrefix}validated:*`,
+                // Also test without prefix
+                'avatar:*',
+                'poster:*',
+                'cooldown:*',
+                // Test other possible prefixes
+                'leveling-bot:*',
+                'bot:*'
+            ];
+            
+            for (const pattern of patterns) {
+                const keys = await redis.keys(pattern);
+                testResults.push(`**${pattern}:** ${keys.length} keys`);
+                
+                if (keys.length > 0) {
+                    console.log(`[PATTERN TEST] ${pattern} found ${keys.length} keys:`, keys.slice(0, 3));
+                }
+            }
+            
+            const embed = {
+                color: testResults.some(r => r.includes(': 0 keys')) ? 0xFF6B6B : 0x00FF00,
+                title: '🧪 Pattern Test Results',
+                description: '```diff\n+ PATTERN MATCHING TEST\n```',
+                fields: [
+                    {
+                        name: '🔍 Results',
+                        value: testResults.join('\n'),
+                        inline: false
+                    }
+                ],
+                footer: { text: 'Check console for sample keys found' }
+            };
+            
+            await message.reply({ embeds: [embed] });
+            
+        } catch (error) {
+            await message.reply(`❌ Pattern test error: ${error.message}`);
+        }
+    }
+
+    // Debug command to check Redis database
+    if (message.content === '!redisdb' && message.author.id === process.env.ADMIN_USER_ID) {
+        try {
+            if (!connectionManager || !connectionManager.isRedisAvailable()) {
+                return await message.reply('❌ Redis not available');
+            }
+            
+            const redis = connectionManager.getRedis();
+            
+            // Check current database
+            const info = await redis.info('keyspace');
+            console.log('[REDIS DB] Keyspace info:', info);
+            
+            // Check what database we're connected to
+            const dbInfo = info.split('\n').filter(line => line.startsWith('db'));
+            
+            let currentDb = 'Unknown';
+            try {
+                // Try to determine current DB (this is tricky with ioredis)
+                const config = redis.options;
+                currentDb = config.db || 0;
+            } catch (error) {
+                console.log('[REDIS DB] Could not determine current DB');
+            }
+            
+            const embed = {
+                color: 0x4A90E2,
+                title: '🗄️ Redis Database Info',
+                description: '```diff\n+ DATABASE INFORMATION\n```',
+                fields: [
+                    {
+                        name: '📊 Current Database',
+                        value: `Database: ${currentDb}`,
+                        inline: true
+                    },
+                    {
+                        name: '🔍 Keyspace Info',
+                        value: dbInfo.length > 0 ? dbInfo.join('\n') : 'No database info available',
+                        inline: false
+                    }
+                ],
+                footer: { text: 'Check console for detailed keyspace info' }
+            };
+            
+            await message.reply({ embeds: [embed] });
+            
+        } catch (error) {
+            await message.reply(`❌ Database info error: ${error.message}`);
+        }
+    }
+    
+    // ==================== EXISTING DEBUG COMMANDS ====================
     
     // Admin cache test command
     if (message.content === '!cachetest' && message.author.id === process.env.ADMIN_USER_ID) {
@@ -442,7 +672,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // Manual cache test command
+    // Rest of existing debug commands...
     if (message.content === '!cachemanualtest' && message.author.id === process.env.ADMIN_USER_ID) {
         try {
             await message.reply('🧪 Starting manual cache test...');
@@ -458,7 +688,6 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // Debug cache contents command
     if (message.content === '!cachecontents' && message.author.id === process.env.ADMIN_USER_ID) {
         try {
             await message.reply('🔍 Debugging cache contents...');
@@ -474,7 +703,6 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // Force preload single user command
     if (message.content.startsWith('!preloaduser ') && message.author.id === process.env.ADMIN_USER_ID) {
         try {
             const userId = message.content.split(' ')[1];
