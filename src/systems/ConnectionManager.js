@@ -18,31 +18,78 @@ try {
 
 /**
  * ConnectionManager - Handles PostgreSQL and Redis connections with graceful fallbacks
- * FIXED: Double prefix issue in cache operations
- * PRIORITY: Redis first, but bot works 100% even if Redis fails
+ * ENHANCED: Environment variable support for multi-bot Redis configuration
  * SUPPORTS: Railway environment variables and REDIS_URL format
  */
 class ConnectionManager {
-    constructor() {
+    constructor(botType = null) {
+        // Determine bot type from environment or parameter
+        this.botType = botType || process.env.BOT_TYPE || 'xp';
+        
         this.postgres = null;
         this.redis = null;
         this.redisConnected = false;
         this.postgresConnected = false;
+        
+        // Get Redis database and prefix from environment variables
+        this.redisDB = parseInt(process.env.REDIS_DB) || this.getDefaultDB(this.botType);
+        this.keyPrefix = process.env.REDIS_KEY_PREFIX || this.getDefaultPrefix(this.botType);
+        
+        console.log(`🔧 ConnectionManager initialized for ${this.botType.toUpperCase()} bot`);
+        console.log(`🔧 Redis DB: ${this.redisDB}, Key Prefix: ${this.keyPrefix}`);
         
         // Fallback cache for when Redis is down (in-memory)
         this.memoryCache = new Map();
         this.memoryCacheTTL = new Map();
         
         // Connection retry settings
-        this.retryAttempts = 3;
-        this.retryDelay = 5000; // 5 seconds
+        this.retryAttempts = parseInt(process.env.REDIS_RETRY_ATTEMPTS) || 3;
+        this.retryDelay = parseInt(process.env.REDIS_RETRY_DELAY) || 5000;
     }
 
     /**
-     * Initialize both connections with fallbacks
+     * Get default database number for bot type
+     */
+    getDefaultDB(botType) {
+        const mapping = {
+            'xp': 0,
+            'leveling': 0,
+            'verification': 1,
+            'verify': 1,
+            'gacha': 2,
+            'quiz': 3,
+            'music': 4,
+            'moderation': 5,
+            'economy': 6,
+            'utility': 7
+        };
+        return mapping[botType.toLowerCase()] || 0;
+    }
+
+    /**
+     * Get default key prefix for bot type
+     */
+    getDefaultPrefix(botType) {
+        const mapping = {
+            'xp': 'Leveling-Bot:',
+            'leveling': 'Leveling-Bot:',
+            'verification': 'Verify-Bot:',
+            'verify': 'Verify-Bot:',
+            'gacha': 'Gacha-Bot:',
+            'quiz': 'Quiz-Bot:',
+            'music': 'Music-Bot:',
+            'moderation': 'Mod-Bot:',
+            'economy': 'Economy-Bot:',
+            'utility': 'Utility-Bot:'
+        };
+        return mapping[botType.toLowerCase()] || `${botType.toUpperCase()}-Bot:`;
+    }
+
+    /**
+     * Initialize both connections with enhanced configuration
      */
     async initialize() {
-        console.log('🔄 Initializing database connections...');
+        console.log(`🔄 Initializing ${this.botType.toUpperCase()} bot connections...`);
         
         // PostgreSQL is REQUIRED - bot cannot function without it
         await this.initializePostgreSQL();
@@ -66,76 +113,81 @@ class ConnectionManager {
      */
     async initializePostgreSQL() {
         try {
-            console.log('🗄️ Connecting to PostgreSQL...');
+            console.log(`🗄️ ${this.botType.toUpperCase()}: Connecting to PostgreSQL...`);
             
             this.postgres = new Pool({
                 connectionString: process.env.DATABASE_URL,
                 ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
                 max: 20, // Maximum pool connections
                 idleTimeoutMillis: 30000,
-                connectionTimeoutMillis: 10000,
+                connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 10000,
             });
 
             // Test connection
             const testClient = await this.postgres.connect();
             const result = await testClient.query('SELECT NOW() as current_time');
-            console.log(`✅ PostgreSQL connected at ${result.rows[0].current_time}`);
+            console.log(`✅ ${this.botType.toUpperCase()}: PostgreSQL connected at ${result.rows[0].current_time}`);
             testClient.release();
             
             this.postgresConnected = true;
             
             // Connection event handlers
             this.postgres.on('error', (err) => {
-                console.error('❌ PostgreSQL pool error:', err);
+                console.error(`❌ ${this.botType.toUpperCase()}: PostgreSQL pool error:`, err);
                 this.postgresConnected = false;
             });
 
             this.postgres.on('connect', () => {
                 if (!this.postgresConnected) {
-                    console.log('🔄 PostgreSQL reconnected');
+                    console.log(`🔄 ${this.botType.toUpperCase()}: PostgreSQL reconnected`);
                     this.postgresConnected = true;
                 }
             });
 
         } catch (error) {
-            console.error('❌ PostgreSQL connection failed:', error.message);
-            console.error('❌ CRITICAL: Bot cannot function without PostgreSQL!');
+            console.error(`❌ ${this.botType.toUpperCase()}: PostgreSQL connection failed:`, error.message);
+            console.error(`❌ CRITICAL: ${this.botType} bot cannot function without PostgreSQL!`);
             throw new Error('PostgreSQL connection required for bot operation');
         }
     }
 
     /**
-     * Initialize Redis (PRIORITIZED but OPTIONAL with fallback)
-     * Supports both Railway REDIS_URL and individual variables (Railway + standard naming)
+     * Initialize Redis with enhanced environment variable support
      */
     async initializeRedis() {
         // Check if Redis module is available
         if (!redisAvailable || !Redis) {
-            console.warn('⚠️ Redis module not available - continuing without Redis caching');
+            console.warn(`⚠️ ${this.botType.toUpperCase()}: Redis module not available - continuing without Redis caching`);
             console.warn('⚠️ Install with: npm install ioredis');
-            console.warn('⚠️ Bot functionality: 100% (performance: standard mode)');
+            console.warn(`⚠️ ${this.botType} bot functionality: 100% (performance: standard mode)`);
             this.redisConnected = false;
             this.redis = null;
             return;
         }
 
         try {
-            console.log('🔴 Connecting to Redis (priority mode)...');
+            console.log(`🔴 Connecting to Redis for ${this.botType.toUpperCase()} Bot...`);
+            console.log(`🔴 Target DB: ${this.redisDB}, Key Prefix: ${this.keyPrefix}`);
             
             let redisConfig;
             
             // Check if REDIS_URL is provided (Railway format)
             if (process.env.REDIS_URL) {
-                console.log('🔗 Using REDIS_URL connection string (Railway format)');
+                console.log(`🔗 Using REDIS_URL for ${this.botType} bot (DB: ${this.redisDB})`);
+                
+                // Parse REDIS_URL and modify for specific database
+                const url = new URL(process.env.REDIS_URL);
+                url.pathname = `/${this.redisDB}`; // Set database number from env
+                
                 redisConfig = {
-                    connectString: process.env.REDIS_URL,
-                    keyPrefix: 'Leveling-Bot:',
-                    retryDelayOnFailover: 5000,
-                    maxRetriesPerRequest: 2,
+                    connectString: url.toString(),
+                    keyPrefix: this.keyPrefix,
+                    retryDelayOnFailover: this.retryDelay,
+                    maxRetriesPerRequest: parseInt(process.env.REDIS_MAX_RETRIES_PER_REQUEST) || 2,
                     lazyConnect: true,
-                    connectTimeout: 10000,
+                    connectTimeout: parseInt(process.env.REDIS_CONNECTION_TIMEOUT) || 10000,
                     commandTimeout: 5000,
-                    enableOfflineQueue: false,
+                    enableOfflineQueue: process.env.REDIS_ENABLE_OFFLINE_QUEUE === 'true',
                     family: 0,
                     retryDelayOnClusterDown: 10000,
                     retryDelayOnReconnect: 10000
@@ -145,23 +197,22 @@ class ConnectionManager {
                 const redisHost = process.env.REDIS_HOST || process.env.REDISHOST || 'localhost';
                 const redisPort = parseInt(process.env.REDIS_PORT || process.env.REDISPORT) || 6379;
                 const redisPassword = process.env.REDIS_PASSWORD || undefined;
-                const redisDb = parseInt(process.env.REDIS_DB) || 0;
                 
                 redisConfig = {
                     host: redisHost,
                     port: redisPort,
                     password: redisPassword,
-                    db: redisDb,
-                    keyPrefix: 'Leveling-Bot:',
-                    retryDelayOnFailover: 5000, // Slower retry: 5 seconds
-                    maxRetriesPerRequest: 2, // Fewer retries
+                    db: this.redisDB, // Use environment variable
+                    keyPrefix: this.keyPrefix, // Use environment variable
+                    retryDelayOnFailover: this.retryDelay,
+                    maxRetriesPerRequest: parseInt(process.env.REDIS_MAX_RETRIES_PER_REQUEST) || 2,
                     lazyConnect: true,
-                    connectTimeout: 10000,
+                    connectTimeout: parseInt(process.env.REDIS_CONNECTION_TIMEOUT) || 10000,
                     commandTimeout: 5000,
-                    enableOfflineQueue: false,
+                    enableOfflineQueue: process.env.REDIS_ENABLE_OFFLINE_QUEUE === 'true',
                     family: 0,
-                    retryDelayOnClusterDown: 10000, // 10 second delay on cluster down
-                    retryDelayOnReconnect: 10000, // 10 second delay on reconnect
+                    retryDelayOnClusterDown: 10000,
+                    retryDelayOnReconnect: 10000
                 };
 
                 // Remove undefined password to avoid connection issues
@@ -169,51 +220,53 @@ class ConnectionManager {
                     delete redisConfig.password;
                 }
 
-                console.log(`🔴 Redis config: ${redisHost}:${redisPort} (DB: ${redisDb})`);
+                console.log(`🔴 ${this.botType.toUpperCase()} Bot Redis config: ${redisHost}:${redisPort} (DB: ${this.redisDB})`);
             }
 
             this.redis = new Redis(redisConfig);
             
-            // Connection event handlers
+            // Enhanced connection event handlers
             this.redis.on('connect', () => {
-                console.log('✅ Redis connected successfully - OPTIMIZATION ACTIVE');
+                console.log(`✅ ${this.botType.toUpperCase()} Bot Redis connected successfully - OPTIMIZATION ACTIVE`);
                 this.redisConnected = true;
             });
 
             this.redis.on('error', (error) => {
-                console.warn('⚠️ Redis connection error:', error.message);
-                console.warn('⚠️ Falling back to in-memory caching - bot remains functional');
+                console.warn(`⚠️ ${this.botType.toUpperCase()} Bot Redis connection error:`, error.message);
+                console.warn(`⚠️ Falling back to in-memory caching - ${this.botType} bot remains functional`);
                 this.redisConnected = false;
             });
 
             this.redis.on('close', () => {
-                console.warn('🔌 Redis connection closed - using fallback cache');
+                console.warn(`🔌 ${this.botType.toUpperCase()} Bot Redis connection closed - using fallback cache`);
                 this.redisConnected = false;
             });
 
             this.redis.on('reconnecting', (delayMs) => {
-                console.log(`🔄 Redis reconnecting in ${delayMs}ms...`);
+                console.log(`🔄 ${this.botType.toUpperCase()} Bot Redis reconnecting in ${delayMs}ms...`);
             });
 
             this.redis.on('ready', () => {
-                console.log('🚀 Redis ready - cache optimization enabled');
+                console.log(`🚀 ${this.botType.toUpperCase()} Bot Redis ready on DB ${this.redisDB} - cache optimization enabled`);
                 this.redisConnected = true;
             });
 
             // Attempt to connect
             await this.redis.connect();
             
-            // Test Redis connection
+            // Test Redis connection with database verification
             const pong = await this.redis.ping();
             if (pong === 'PONG') {
-                console.log('✅ Redis connection test successful - 95% faster canvas generation enabled');
+                // Verify we're on the correct database
+                const dbSize = await this.redis.dbsize();
+                console.log(`✅ ${this.botType.toUpperCase()} Bot Redis connection test successful`);
+                console.log(`✅ Connected to DB ${this.redisDB} with ${dbSize} keys and prefix "${this.keyPrefix}"`);
                 this.redisConnected = true;
             }
 
         } catch (error) {
-            console.warn('⚠️ Redis connection failed:', error.message);
-            console.warn('⚠️ Bot will continue without Redis caching (slower but fully functional)');
-            console.warn('⚠️ To enable Redis: Check connection details and ensure Redis server is running');
+            console.warn(`⚠️ ${this.botType.toUpperCase()} Bot Redis connection failed:`, error.message);
+            console.warn(`⚠️ ${this.botType} bot will continue without Redis caching (slower but fully functional)`);
             this.redisConnected = false;
             this.redis = null;
         }
@@ -255,23 +308,31 @@ class ConnectionManager {
      */
 
     /**
-     * Set cache value with Redis priority and memory fallback - FIXED: Prevent double prefix
+     * Set cache value with Redis priority and memory fallback - Enhanced with TTL from env
      */
-    async setCache(key, value, ttlSeconds = 3600) {
+    async setCache(key, value, ttlSeconds = null) {
+        // Use environment variable for TTL if not specified
+        if (!ttlSeconds) {
+            if (key.includes('avatar')) ttlSeconds = parseInt(process.env.CACHE_AVATAR_TTL) || 43200;
+            else if (key.includes('poster')) ttlSeconds = parseInt(process.env.CACHE_POSTER_TTL) || 86400;
+            else if (key.includes('leaderboard')) ttlSeconds = parseInt(process.env.CACHE_LEADERBOARD_TTL) || 300;
+            else ttlSeconds = 3600; // Default 1 hour
+        }
+
         try {
             if (this.isRedisAvailable()) {
-                // FIXED: Don't add prefix here since RedisCacheManager already adds it or Redis config has keyPrefix
+                // Redis with keyPrefix handles prefix automatically
                 await this.redis.setex(key, ttlSeconds, typeof value === 'object' ? JSON.stringify(value) : value);
                 return true;
             } else {
                 // FALLBACK: Use memory cache
                 this.memoryCache.set(key, value);
                 this.memoryCacheTTL.set(key, Date.now() + (ttlSeconds * 1000));
-                console.log(`[FALLBACK] Cached ${key} in memory (TTL: ${ttlSeconds}s)`);
+                console.log(`[FALLBACK] ${this.botType.toUpperCase()}: Cached ${key} in memory (TTL: ${ttlSeconds}s)`);
                 return true;
             }
         } catch (error) {
-            console.error('[CACHE] Redis error, falling back to memory:', error.message);
+            console.error(`[CACHE] ${this.botType.toUpperCase()} Redis error, falling back to memory:`, error.message);
             // Auto-fallback to memory cache on Redis error
             this.memoryCache.set(key, value);
             this.memoryCacheTTL.set(key, Date.now() + (ttlSeconds * 1000));
@@ -280,12 +341,12 @@ class ConnectionManager {
     }
 
     /**
-     * Get cache value with Redis priority and memory fallback - FIXED: Prevent double prefix
+     * Get cache value with Redis priority and memory fallback
      */
     async getCache(key) {
         try {
             if (this.isRedisAvailable()) {
-                // FIXED: Don't add prefix here since Redis config handles keyPrefix
+                // Redis with keyPrefix handles prefix automatically
                 const value = await this.redis.get(key);
                 if (value) {
                     try {
@@ -312,7 +373,7 @@ class ConnectionManager {
                 return null;
             }
         } catch (error) {
-            console.error('[CACHE] Redis error, trying memory cache:', error.message);
+            console.error(`[CACHE] ${this.botType.toUpperCase()} Redis error, trying memory cache:`, error.message);
             // Auto-fallback to memory cache on Redis error
             const ttl = this.memoryCacheTTL.get(key);
             if (ttl && Date.now() <= ttl) {
@@ -323,7 +384,7 @@ class ConnectionManager {
     }
 
     /**
-     * Delete cache key with Redis priority and memory fallback - FIXED: Prevent double prefix
+     * Delete cache key with Redis priority and memory fallback
      */
     async deleteCache(key) {
         try {
@@ -335,7 +396,7 @@ class ConnectionManager {
             this.memoryCacheTTL.delete(key);
             return true;
         } catch (error) {
-            console.error('[CACHE] Error deleting cache, cleaning memory:', error.message);
+            console.error(`[CACHE] ${this.botType.toUpperCase()} Error deleting cache, cleaning memory:`, error.message);
             this.memoryCache.delete(key);
             this.memoryCacheTTL.delete(key);
             return true;
@@ -343,23 +404,28 @@ class ConnectionManager {
     }
 
     /**
-     * Set binary cache (for images) with Redis priority and memory fallback - FIXED: Prevent double prefix
+     * Set binary cache (for images) with Redis priority and memory fallback
      */
-    async setBinaryCache(key, buffer, ttlSeconds = 3600) {
+    async setBinaryCache(key, buffer, ttlSeconds = null) {
+        // Use environment variable for TTL if not specified
+        if (!ttlSeconds) {
+            ttlSeconds = parseInt(process.env.CACHE_AVATAR_TTL) || 43200; // Default for binary is avatar TTL
+        }
+
         try {
             if (this.isRedisAvailable()) {
-                // FIXED: Don't add prefix here since Redis config handles keyPrefix
+                // Redis with keyPrefix handles prefix automatically
                 await this.redis.setex(key, ttlSeconds, buffer);
                 return true;
             } else {
                 // FALLBACK: Store buffer in memory cache
                 this.memoryCache.set(key, buffer);
                 this.memoryCacheTTL.set(key, Date.now() + (ttlSeconds * 1000));
-                console.log(`[FALLBACK] Cached binary ${key} in memory (${Math.round(buffer.length / 1024)}KB)`);
+                console.log(`[FALLBACK] ${this.botType.toUpperCase()}: Cached binary ${key} in memory (${Math.round(buffer.length / 1024)}KB)`);
                 return true;
             }
         } catch (error) {
-            console.error('[CACHE] Redis binary error, using memory:', error.message);
+            console.error(`[CACHE] ${this.botType.toUpperCase()} Redis binary error, using memory:`, error.message);
             // Auto-fallback to memory cache
             this.memoryCache.set(key, buffer);
             this.memoryCacheTTL.set(key, Date.now() + (ttlSeconds * 1000));
@@ -368,12 +434,12 @@ class ConnectionManager {
     }
 
     /**
-     * Get binary cache with Redis priority and memory fallback - FIXED: Prevent double prefix
+     * Get binary cache with Redis priority and memory fallback
      */
     async getBinaryCache(key) {
         try {
             if (this.isRedisAvailable()) {
-                // FIXED: Don't add prefix here since Redis config handles keyPrefix
+                // Redis with keyPrefix handles prefix automatically
                 return await this.redis.getBuffer(key);
             } else {
                 // FALLBACK: Get from memory cache
@@ -391,7 +457,7 @@ class ConnectionManager {
                 return null;
             }
         } catch (error) {
-            console.error('[CACHE] Redis binary error, trying memory:', error.message);
+            console.error(`[CACHE] ${this.botType.toUpperCase()} Redis binary error, trying memory:`, error.message);
             // Auto-fallback to memory cache
             const ttl = this.memoryCacheTTL.get(key);
             if (ttl && Date.now() <= ttl) {
@@ -402,38 +468,26 @@ class ConnectionManager {
     }
 
     /**
-     * Clear pattern with Redis priority and limited memory fallback - FIXED: Handle double prefix
+     * Clear pattern with Redis priority and limited memory fallback
      */
     async clearPattern(pattern) {
         try {
             let redisCleared = 0;
             
             if (this.isRedisAvailable()) {
-                // FIXED: Handle both single and double prefix patterns
-                const patterns = [
-                    pattern,
-                    pattern.replace('Leveling-Bot:', '') // Try without prefix since Redis config adds it
-                ];
-                
-                for (const searchPattern of patterns) {
-                    try {
-                        const keys = await this.redis.keys(searchPattern);
-                        if (keys.length > 0) {
-                            // Note: Redis with keyPrefix will automatically add prefix to keys() results
-                            const keysToDelete = keys.map(key => key.replace('Leveling-Bot:', ''));
-                            await this.redis.del(...keysToDelete);
-                            redisCleared += keys.length;
-                            console.log(`[CACHE] Cleared ${keys.length} keys matching pattern: ${searchPattern}`);
-                        }
-                    } catch (patternError) {
-                        console.log(`[CACHE] Pattern ${searchPattern} failed: ${patternError.message}`);
-                    }
+                const keys = await this.redis.keys(pattern);
+                if (keys.length > 0) {
+                    // Remove keyPrefix from keys since Redis automatically adds it
+                    const keysToDelete = keys.map(key => key.replace(this.keyPrefix, ''));
+                    await this.redis.del(...keysToDelete);
+                    redisCleared += keys.length;
+                    console.log(`[CACHE] ${this.botType.toUpperCase()}: Cleared ${keys.length} keys matching pattern: ${pattern}`);
                 }
             }
             
             // ALSO clear from memory cache (for consistency)
             let memoryCleared = 0;
-            const searchTerm = pattern.replace(/\*/g, '').replace('Leveling-Bot:', '');
+            const searchTerm = pattern.replace(/\*/g, '').replace(this.keyPrefix, '');
             for (const [key] of this.memoryCache) {
                 if (key.includes(searchTerm)) {
                     this.memoryCache.delete(key);
@@ -444,12 +498,12 @@ class ConnectionManager {
             
             const totalCleared = redisCleared + memoryCleared;
             if (totalCleared > 0) {
-                console.log(`[CACHE] Cleared ${redisCleared} Redis + ${memoryCleared} memory keys`);
+                console.log(`[CACHE] ${this.botType.toUpperCase()}: Cleared ${redisCleared} Redis + ${memoryCleared} memory keys`);
             }
             
             return totalCleared;
         } catch (error) {
-            console.error('[CACHE] Error clearing pattern:', error.message);
+            console.error(`[CACHE] ${this.botType.toUpperCase()} Error clearing pattern:`, error.message);
             return 0;
         }
     }
@@ -458,7 +512,7 @@ class ConnectionManager {
      * Start memory cache cleanup (when Redis is down or as backup)
      */
     startMemoryCacheCleanup() {
-        console.log('[FALLBACK] Starting memory cache cleanup timer (60s intervals)');
+        console.log(`[FALLBACK] ${this.botType.toUpperCase()}: Starting memory cache cleanup timer (60s intervals)`);
         
         setInterval(() => {
             const now = Date.now();
@@ -473,16 +527,26 @@ class ConnectionManager {
             }
             
             if (cleaned > 0) {
-                console.log(`[FALLBACK] Cleaned up ${cleaned} expired memory cache entries`);
+                console.log(`[FALLBACK] ${this.botType.toUpperCase()}: Cleaned up ${cleaned} expired memory cache entries`);
             }
         }, 60000); // Clean every minute
     }
 
     /**
-     * Get connection health status
+     * Enhanced health status with environment info
      */
     getHealthStatus() {
         return {
+            botType: this.botType.toUpperCase(),
+            environment: {
+                redisDB: this.redisDB,
+                keyPrefix: this.keyPrefix,
+                configuredFromEnv: {
+                    db: !!process.env.REDIS_DB,
+                    prefix: !!process.env.REDIS_KEY_PREFIX,
+                    botType: !!process.env.BOT_TYPE
+                }
+            },
             postgresql: {
                 connected: this.postgresConnected,
                 status: this.postgresConnected ? '✅ Healthy' : '❌ Disconnected',
@@ -490,17 +554,20 @@ class ConnectionManager {
             },
             redis: {
                 connected: this.redisConnected,
-                status: this.redisConnected ? '✅ Optimized' : '⚠️ Fallback Mode',
+                status: this.redisConnected ? `✅ Optimized (DB: ${this.redisDB})` : '⚠️ Fallback Mode',
+                database: this.redisDB,
+                keyPrefix: this.keyPrefix,
                 required: false,
                 fallbackActive: !this.redisConnected,
                 priority: true,
                 connectionType: process.env.REDIS_URL ? 'Railway URL' : 'Individual Variables'
             },
             cache: {
-                type: this.redisConnected ? 'Redis (Optimized)' : 'In-Memory Fallback',
+                type: this.redisConnected ? `Redis DB${this.redisDB} (Optimized)` : 'In-Memory Fallback',
                 entries: this.redisConnected ? 'Redis-managed' : this.memoryCache.size,
                 status: '✅ Operational',
-                performance: this.redisConnected ? 'Maximum' : 'Standard'
+                performance: this.redisConnected ? 'Maximum' : 'Standard',
+                prefix: this.keyPrefix
             }
         };
     }
@@ -510,6 +577,8 @@ class ConnectionManager {
      */
     async testConnections() {
         const results = {
+            botType: this.botType.toUpperCase(),
+            targetDatabase: this.redisDB,
             postgresql: false,
             redis: false,
             redisDetails: null,
@@ -522,9 +591,9 @@ class ConnectionManager {
             await client.query('SELECT 1');
             client.release();
             results.postgresql = true;
-            console.log('✅ PostgreSQL connection test passed');
+            console.log(`✅ ${this.botType.toUpperCase()}: PostgreSQL connection test passed`);
         } catch (error) {
-            console.error('❌ PostgreSQL connection test failed:', error.message);
+            console.error(`❌ ${this.botType.toUpperCase()}: PostgreSQL connection test failed:`, error.message);
             results.postgresqlError = error.message;
         }
 
@@ -535,26 +604,35 @@ class ConnectionManager {
                 results.redis = (pong === 'PONG');
                 
                 if (results.redis) {
-                    // Get Redis info
+                    // Get Redis info including database
                     const info = await this.redis.info('server');
+                    const dbSize = await this.redis.dbsize();
+                    
                     results.redisDetails = {
                         version: info.match(/redis_version:([^\r\n]+)/)?.[1] || 'Unknown',
                         mode: info.match(/redis_mode:([^\r\n]+)/)?.[1] || 'standalone',
+                        database: this.redisDB,
+                        keyPrefix: this.keyPrefix,
+                        entries: dbSize,
+                        botType: this.botType.toUpperCase(),
                         connectionType: process.env.REDIS_URL ? 'Railway URL' : 'Individual Variables'
                     };
                 }
                 
-                console.log('✅ Redis connection test passed');
+                console.log(`✅ ${this.botType.toUpperCase()}: Redis connection test passed (DB: ${this.redisDB})`);
             } else {
-                console.log('⚠️ Redis connection test skipped (using fallback mode)');
+                console.log(`⚠️ ${this.botType.toUpperCase()}: Redis connection test skipped (using fallback mode)`);
                 results.redisDetails = { 
                     mode: 'fallback', 
                     reason: 'Not connected',
+                    database: this.redisDB,
+                    keyPrefix: this.keyPrefix,
+                    botType: this.botType.toUpperCase(),
                     connectionType: process.env.REDIS_URL ? 'Railway URL (failed)' : 'Individual Variables (failed)'
                 };
             }
         } catch (error) {
-            console.error('❌ Redis connection test failed:', error.message);
+            console.error(`❌ ${this.botType.toUpperCase()}: Redis connection test failed:`, error.message);
             results.redisError = error.message;
         }
 
@@ -562,17 +640,17 @@ class ConnectionManager {
     }
 
     /**
-     * Attempt to reconnect Redis with priority handling
+     * Attempt to reconnect Redis with enhanced bot-specific handling
      */
     async reconnectRedis() {
         // Check if Redis module is available
         if (!redisAvailable || !Redis) {
-            console.warn('⚠️ Cannot reconnect Redis - ioredis module not available');
+            console.warn(`⚠️ ${this.botType.toUpperCase()}: Cannot reconnect Redis - ioredis module not available`);
             console.warn('⚠️ Install with: npm install ioredis');
             return false;
         }
 
-        console.log('🔄 Attempting Redis reconnection (priority mode)...');
+        console.log(`🔄 ${this.botType.toUpperCase()}: Attempting Redis reconnection...`);
         
         try {
             if (this.redis) {
@@ -583,24 +661,27 @@ class ConnectionManager {
             await this.initializeRedis();
             
             if (this.redisConnected) {
-                console.log('✅ Redis reconnection successful - cache optimization restored');
+                console.log(`✅ ${this.botType.toUpperCase()}: Redis reconnection successful - cache optimization restored`);
                 return true;
             } else {
-                console.log('⚠️ Redis reconnection failed - continuing with memory fallback');
+                console.log(`⚠️ ${this.botType.toUpperCase()}: Redis reconnection failed - continuing with memory fallback`);
                 return false;
             }
         } catch (error) {
-            console.error('❌ Redis reconnection error:', error.message);
-            console.warn('⚠️ Will retry Redis connection in 5 minutes');
+            console.error(`❌ ${this.botType.toUpperCase()}: Redis reconnection error:`, error.message);
+            console.warn(`⚠️ ${this.botType} will retry Redis connection in 5 minutes`);
             return false;
         }
     }
 
     /**
-     * Get cache performance metrics
+     * Enhanced cache performance metrics
      */
     getCacheMetrics() {
         return {
+            botType: this.botType.toUpperCase(),
+            database: this.redisDB,
+            keyPrefix: this.keyPrefix,
             redis: {
                 available: this.isRedisAvailable(),
                 connected: this.redisConnected,
@@ -622,32 +703,340 @@ class ConnectionManager {
     }
 
     /**
+     * Debug environment configuration
+     */
+    debugEnvironmentConfig() {
+        console.log(`🔍 [${this.botType.toUpperCase()}] Environment Configuration:`);
+        console.log(`  Bot Type: ${this.botType}`);
+        console.log(`  Redis DB: ${this.redisDB} (from ${process.env.REDIS_DB ? 'env' : 'default'})`);
+        console.log(`  Key Prefix: ${this.keyPrefix} (from ${process.env.REDIS_KEY_PREFIX ? 'env' : 'default'})`);
+        console.log(`  Redis Host: ${process.env.REDIS_HOST || process.env.REDISHOST || 'default'}`);
+        console.log(`  Redis Port: ${process.env.REDIS_PORT || process.env.REDISPORT || 'default'}`);
+        console.log(`  Redis URL: ${process.env.REDIS_URL ? 'configured' : 'not set'}`);
+        console.log(`  Connection Timeout: ${process.env.REDIS_CONNECTION_TIMEOUT || 'default'}`);
+        console.log(`  Retry Attempts: ${this.retryAttempts}`);
+    }
+
+    /**
      * Graceful shutdown
      */
     async shutdown() {
-        console.log('🛑 Shutting down connections...');
+        console.log(`🛑 ${this.botType.toUpperCase()}: Shutting down connections...`);
 
         try {
             // Close Redis connection
             if (this.redis) {
                 await this.redis.quit();
-                console.log('✅ Redis connection closed');
+                console.log(`✅ ${this.botType.toUpperCase()}: Redis connection closed`);
             }
 
             // Close PostgreSQL pool
             if (this.postgres) {
                 await this.postgres.end();
-                console.log('✅ PostgreSQL connection pool closed');
+                console.log(`✅ ${this.botType.toUpperCase()}: PostgreSQL connection pool closed`);
             }
 
             // Clear memory cache
             this.memoryCache.clear();
             this.memoryCacheTTL.clear();
-            console.log('✅ Memory cache cleared');
+            console.log(`✅ ${this.botType.toUpperCase()}: Memory cache cleared`);
 
         } catch (error) {
-            console.error('❌ Error during connection shutdown:', error);
+            console.error(`❌ ${this.botType.toUpperCase()}: Error during connection shutdown:`, error);
         }
+    }
+
+    /**
+     * Enhanced cache information with environment details
+     */
+    async getCacheInfo() {
+        try {
+            if (!this.isRedisAvailable()) {
+                return {
+                    botType: this.botType.toUpperCase(),
+                    mode: 'In-Memory Fallback',
+                    database: this.redisDB,
+                    keyPrefix: this.keyPrefix,
+                    entries: this.memoryCache.size,
+                    redis: false,
+                    environment: {
+                        configuredFromEnv: !!process.env.REDIS_DB,
+                        prefixFromEnv: !!process.env.REDIS_KEY_PREFIX
+                    }
+                };
+            }
+
+            const dbSize = await this.redis.dbsize();
+            const info = await this.redis.info('memory');
+            
+            return {
+                botType: this.botType.toUpperCase(),
+                mode: 'Redis',
+                database: this.redisDB,
+                keyPrefix: this.keyPrefix,
+                entries: dbSize,
+                redis: true,
+                memory: {
+                    used: info.match(/used_memory_human:([^\r\n]+)/)?.[1] || 'Unknown',
+                    peak: info.match(/used_memory_peak_human:([^\r\n]+)/)?.[1] || 'Unknown',
+                    fragmentation: info.match(/mem_fragmentation_ratio:([0-9.]+)/)?.[1] || 'Unknown'
+                },
+                environment: {
+                    configuredFromEnv: !!process.env.REDIS_DB,
+                    prefixFromEnv: !!process.env.REDIS_KEY_PREFIX,
+                    connectionType: process.env.REDIS_URL ? 'Railway URL' : 'Individual Variables'
+                }
+            };
+        } catch (error) {
+            console.error(`[CACHE] ${this.botType.toUpperCase()} Error getting cache info:`, error);
+            return { 
+                botType: this.botType.toUpperCase(),
+                mode: 'Error', 
+                error: error.message 
+            };
+        }
+    }
+
+    /**
+     * Test cache functionality with bot-specific testing
+     */
+    async testCache() {
+        try {
+            const testKey = `test:${this.botType}:${Date.now()}`;
+            const testValue = `cache-test-${this.botType}-${Date.now()}`;
+            
+            console.log(`[CACHE TEST] ${this.botType.toUpperCase()}: Testing cache functionality...`);
+            
+            // Test set operation
+            const setResult = await this.setCache(testKey, testValue, 60);
+            if (!setResult) {
+                return { 
+                    success: false, 
+                    error: 'Cache set operation failed',
+                    botType: this.botType.toUpperCase() 
+                };
+            }
+            
+            // Test get operation
+            const getValue = await this.getCache(testKey);
+            if (getValue !== testValue) {
+                return { 
+                    success: false, 
+                    error: `Cache get failed: expected '${testValue}', got '${getValue}'`,
+                    botType: this.botType.toUpperCase()
+                };
+            }
+            
+            // Test delete operation
+            await this.deleteCache(testKey);
+            const deletedValue = await this.getCache(testKey);
+            if (deletedValue !== null) {
+                return { 
+                    success: false, 
+                    error: 'Cache delete operation failed',
+                    botType: this.botType.toUpperCase()
+                };
+            }
+            
+            console.log(`[CACHE TEST] ${this.botType.toUpperCase()}: Cache test passed successfully`);
+            return { 
+                success: true, 
+                message: `Cache test passed for ${this.botType.toUpperCase()} bot`,
+                database: this.redisDB,
+                keyPrefix: this.keyPrefix,
+                mode: this.redisConnected ? 'Redis' : 'Memory Fallback'
+            };
+            
+        } catch (error) {
+            console.error(`[CACHE TEST] ${this.botType.toUpperCase()}: Cache test error:`, error);
+            return { 
+                success: false, 
+                error: error.message,
+                botType: this.botType.toUpperCase()
+            };
+        }
+    }
+
+    /**
+     * Get detailed Redis database information
+     */
+    async getRedisDBInfo() {
+        try {
+            if (!this.isRedisAvailable()) {
+                return {
+                    available: false,
+                    reason: 'Redis not connected',
+                    botType: this.botType.toUpperCase(),
+                    targetDB: this.redisDB
+                };
+            }
+
+            const info = await this.redis.info('keyspace');
+            const dbSize = await this.redis.dbsize();
+            const memory = await this.redis.info('memory');
+            
+            return {
+                available: true,
+                botType: this.botType.toUpperCase(),
+                database: this.redisDB,
+                keyPrefix: this.keyPrefix,
+                keyCount: dbSize,
+                keyspaceInfo: info,
+                memoryUsage: {
+                    used: memory.match(/used_memory_human:([^\r\n]+)/)?.[1] || 'Unknown',
+                    peak: memory.match(/used_memory_peak_human:([^\r\n]+)/)?.[1] || 'Unknown'
+                }
+            };
+            
+        } catch (error) {
+            console.error(`[REDIS INFO] ${this.botType.toUpperCase()}: Error getting Redis DB info:`, error);
+            return {
+                available: false,
+                error: error.message,
+                botType: this.botType.toUpperCase()
+            };
+        }
+    }
+
+    /**
+     * Monitor cache performance
+     */
+    async monitorCachePerformance(duration = 60000) {
+        console.log(`[PERFORMANCE] ${this.botType.toUpperCase()}: Starting cache performance monitoring for ${duration/1000}s...`);
+        
+        const startTime = Date.now();
+        let operations = 0;
+        let errors = 0;
+        
+        const monitor = setInterval(async () => {
+            try {
+                const testKey = `perf:${this.botType}:${Date.now()}`;
+                const testValue = `performance-test-${operations}`;
+                
+                await this.setCache(testKey, testValue, 10);
+                await this.getCache(testKey);
+                await this.deleteCache(testKey);
+                
+                operations += 3; // Set, Get, Delete = 3 operations
+            } catch (error) {
+                errors++;
+                console.error(`[PERFORMANCE] ${this.botType.toUpperCase()}: Cache operation error:`, error.message);
+            }
+        }, 1000); // Test every second
+        
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                clearInterval(monitor);
+                const endTime = Date.now();
+                const actualDuration = endTime - startTime;
+                
+                const results = {
+                    botType: this.botType.toUpperCase(),
+                    database: this.redisDB,
+                    keyPrefix: this.keyPrefix,
+                    duration: actualDuration,
+                    operations,
+                    errors,
+                    operationsPerSecond: Math.round((operations / actualDuration) * 1000),
+                    errorRate: Math.round((errors / operations) * 100) || 0,
+                    mode: this.redisConnected ? 'Redis' : 'Memory Fallback'
+                };
+                
+                console.log(`[PERFORMANCE] ${this.botType.toUpperCase()}: Performance test complete:`, results);
+                resolve(results);
+            }, duration);
+        });
+    }
+
+    /**
+     * Cleanup memory and optimize performance
+     */
+    async optimizeCache() {
+        try {
+            console.log(`[OPTIMIZE] ${this.botType.toUpperCase()}: Starting cache optimization...`);
+            
+            let optimized = 0;
+            
+            // Clean up expired memory cache entries
+            const now = Date.now();
+            for (const [key, expiry] of this.memoryCacheTTL) {
+                if (now > expiry) {
+                    this.memoryCache.delete(key);
+                    this.memoryCacheTTL.delete(key);
+                    optimized++;
+                }
+            }
+            
+            // If Redis is available, run optimization commands
+            if (this.isRedisAvailable()) {
+                try {
+                    // Run Redis memory optimization (removes expired keys)
+                    await this.redis.memory('purge');
+                    optimized++;
+                    
+                    // Get memory stats before and after
+                    const info = await this.redis.info('memory');
+                    const memoryUsed = info.match(/used_memory_human:([^\r\n]+)/)?.[1] || 'Unknown';
+                    
+                    console.log(`[OPTIMIZE] ${this.botType.toUpperCase()}: Redis memory after optimization: ${memoryUsed}`);
+                } catch (redisOptimizeError) {
+                    console.log(`[OPTIMIZE] ${this.botType.toUpperCase()}: Redis optimization skipped:`, redisOptimizeError.message);
+                }
+            }
+            
+            console.log(`[OPTIMIZE] ${this.botType.toUpperCase()}: Optimization complete - ${optimized} operations performed`);
+            
+            return {
+                success: true,
+                operations: optimized,
+                botType: this.botType.toUpperCase(),
+                database: this.redisDB,
+                memoryCleared: optimized
+            };
+            
+        } catch (error) {
+            console.error(`[OPTIMIZE] ${this.botType.toUpperCase()}: Cache optimization error:`, error);
+            return {
+                success: false,
+                error: error.message,
+                botType: this.botType.toUpperCase()
+            };
+        }
+    }
+
+    /**
+     * Export configuration for debugging
+     */
+    exportConfig() {
+        return {
+            botType: this.botType,
+            redis: {
+                database: this.redisDB,
+                keyPrefix: this.keyPrefix,
+                connected: this.redisConnected,
+                host: process.env.REDIS_HOST || process.env.REDISHOST,
+                port: process.env.REDIS_PORT || process.env.REDISPORT,
+                hasUrl: !!process.env.REDIS_URL,
+                retryAttempts: this.retryAttempts,
+                retryDelay: this.retryDelay
+            },
+            postgres: {
+                connected: this.postgresConnected,
+                hasUrl: !!process.env.DATABASE_URL
+            },
+            environment: {
+                nodeEnv: process.env.NODE_ENV,
+                configuredFromEnv: {
+                    botType: !!process.env.BOT_TYPE,
+                    redisDB: !!process.env.REDIS_DB,
+                    keyPrefix: !!process.env.REDIS_KEY_PREFIX
+                }
+            },
+            cache: {
+                memoryEntries: this.memoryCache.size,
+                memoryTTLEntries: this.memoryCacheTTL.size
+            }
+        };
     }
 }
 
