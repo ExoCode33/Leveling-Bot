@@ -1,6 +1,6 @@
 /**
  * RedisCacheManager - High-level caching interface for Leveling-Bot
- * FIXED: Avatar hash extraction for animated avatars and cache preloading system
+ * ENHANCED: Avatar hash extraction for animated avatars, cache preloading system, and comprehensive debugging
  */
 class RedisCacheManager {
     constructor(redis = null, connectionManager = null) {
@@ -31,7 +31,7 @@ class RedisCacheManager {
     }
 
     /**
-     * PRELOAD SYSTEM - Warm up cache on bot startup - FIXED VERSION
+     * PRELOAD SYSTEM - Warm up cache on bot startup - ENHANCED VERSION
      */
     async preloadCache(client, databaseManager) {
         if (this.preloadingInProgress) {
@@ -201,7 +201,7 @@ class RedisCacheManager {
     }
 
     /**
-     * FIXED: Preload user avatar - Actually loads and caches with verification
+     * ENHANCED: Preload user avatar - Actually loads and caches with verification
      */
     async preloadUserAvatar(user) {
         try {
@@ -307,7 +307,7 @@ class RedisCacheManager {
     }
 
     /**
-     * FIXED: Preload user poster - Actually generates and caches with verification
+     * ENHANCED: Preload user poster - Actually generates and caches with verification
      */
     async preloadUserPoster(userData, member, guild) {
         try {
@@ -352,14 +352,14 @@ class RedisCacheManager {
     }
 
     /**
-     * Extract avatar hash from Discord avatar URL - FIXED for animated avatars
+     * Extract avatar hash from Discord avatar URL - ENHANCED for animated avatars
      */
     extractAvatarHash(avatarURL) {
         try {
             console.log(`[CACHE] 🔍 Extracting hash from: ${avatarURL}`);
             
             const patterns = [
-                // Animated avatars (a_prefix) - FIXED PATTERN
+                // Animated avatars (a_prefix) - ENHANCED PATTERN
                 /avatars\/(\d+)\/(a_[a-f0-9]+)\.(png|jpg|gif|webp)/i,
                 // Regular avatars
                 /avatars\/(\d+)\/([a-f0-9]+)\.(png|jpg|gif|webp)/i,
@@ -410,7 +410,7 @@ class RedisCacheManager {
     // ==================== USER AVATAR CACHING ====================
     
     /**
-     * FIXED: Cache user avatar with verification
+     * Cache user avatar with verification - ENHANCED
      */
     async cacheUserAvatar(userId, avatarHash, avatarBuffer) {
         try {
@@ -419,7 +419,7 @@ class RedisCacheManager {
                 return false;
             }
 
-            const key = `${this.keyPrefix}avatar:${userId}:${avatarHash}`;
+            const key = `avatar:${userId}:${avatarHash}`;
             const ttl = 43200; // 12 hours
             
             console.log(`[CACHE] Caching avatar: ${key} (${Math.round(avatarBuffer.length/1024)}KB)`);
@@ -440,9 +440,10 @@ class RedisCacheManager {
                 }
                 return false;
             } else if (this.redis) {
-                await this.redis.setex(key, ttl, avatarBuffer);
+                const fullKey = `${this.keyPrefix}avatar:${userId}:${avatarHash}`;
+                await this.redis.setex(fullKey, ttl, avatarBuffer);
                 
-                const verification = await this.redis.getBuffer(key);
+                const verification = await this.redis.getBuffer(fullKey);
                 if (verification && verification.length === avatarBuffer.length) {
                     console.log(`[CACHE] ✅ Direct Redis: Avatar cached for user ${userId}`);
                     return true;
@@ -464,12 +465,13 @@ class RedisCacheManager {
      */
     async getCachedAvatar(userId, avatarHash) {
         try {
-            const key = `${this.keyPrefix}avatar:${userId}:${avatarHash}`;
+            const key = `avatar:${userId}:${avatarHash}`;
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 return await this.connectionManager.getBinaryCache(key);
             } else if (this.redis) {
-                return await this.redis.getBuffer(key);
+                const fullKey = `${this.keyPrefix}avatar:${userId}:${avatarHash}`;
+                return await this.redis.getBuffer(fullKey);
             }
             
             return null;
@@ -482,7 +484,7 @@ class RedisCacheManager {
     // ==================== WANTED POSTER CACHING ====================
     
     /**
-     * FIXED: Cache poster with verification
+     * Cache poster with verification - ENHANCED
      */
     async cacheWantedPoster(userId, level, bounty, canvasBuffer) {
         try {
@@ -491,7 +493,7 @@ class RedisCacheManager {
                 return false;
             }
 
-            const key = `${this.keyPrefix}poster:${userId}:${level}:${bounty}`;
+            const key = `poster:${userId}:${level}:${bounty}`;
             const ttl = 86400; // 24 hours
             
             console.log(`[CACHE] Caching poster: ${key} (${Math.round(canvasBuffer.length/1024)}KB)`);
@@ -512,9 +514,10 @@ class RedisCacheManager {
                 }
                 return false;
             } else if (this.redis) {
-                await this.redis.setex(key, ttl, canvasBuffer);
+                const fullKey = `${this.keyPrefix}poster:${userId}:${level}:${bounty}`;
+                await this.redis.setex(fullKey, ttl, canvasBuffer);
                 
-                const verification = await this.redis.getBuffer(key);
+                const verification = await this.redis.getBuffer(fullKey);
                 if (verification && verification.length === canvasBuffer.length) {
                     console.log(`[CACHE] ✅ Direct Redis: Poster cached for user ${userId}`);
                     return true;
@@ -536,12 +539,13 @@ class RedisCacheManager {
      */
     async getCachedPoster(userId, level, bounty) {
         try {
-            const key = `${this.keyPrefix}poster:${userId}:${level}:${bounty}`;
+            const key = `poster:${userId}:${level}:${bounty}`;
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 return await this.connectionManager.getBinaryCache(key);
             } else if (this.redis) {
-                return await this.redis.getBuffer(key);
+                const fullKey = `${this.keyPrefix}poster:${userId}:${level}:${bounty}`;
+                return await this.redis.getBuffer(fullKey);
             }
             
             return null;
@@ -556,11 +560,11 @@ class RedisCacheManager {
      */
     async invalidateUserPosters(userId) {
         try {
-            const pattern = `${this.keyPrefix}poster:${userId}:*`;
-            
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                const pattern = `poster:${userId}:*`;
                 return await this.connectionManager.clearPattern(pattern) > 0;
             } else if (this.redis) {
+                const pattern = `${this.keyPrefix}poster:${userId}:*`;
                 const keys = await this.redis.keys(pattern);
                 if (keys.length > 0) {
                     await this.redis.del(...keys);
@@ -579,13 +583,14 @@ class RedisCacheManager {
     
     async cacheLeaderboard(guildId, type, data) {
         try {
-            const key = `${this.keyPrefix}leaderboard:${guildId}:${type}`;
-            const ttl = 300;
+            const key = `leaderboard:${guildId}:${type}`;
+            const ttl = 300; // 5 minutes
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 return await this.connectionManager.setCache(key, JSON.stringify(data), ttl);
             } else if (this.redis) {
-                await this.redis.setex(key, ttl, JSON.stringify(data));
+                const fullKey = `${this.keyPrefix}leaderboard:${guildId}:${type}`;
+                await this.redis.setex(fullKey, ttl, JSON.stringify(data));
                 return true;
             }
             
@@ -598,7 +603,7 @@ class RedisCacheManager {
 
     async getCachedLeaderboard(guildId, type) {
         try {
-            const key = `${this.keyPrefix}leaderboard:${guildId}:${type}`;
+            const key = `leaderboard:${guildId}:${type}`;
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const data = await this.connectionManager.getCache(key);
@@ -606,7 +611,8 @@ class RedisCacheManager {
                     return JSON.parse(data);
                 }
             } else if (this.redis) {
-                const data = await this.redis.get(key);
+                const fullKey = `${this.keyPrefix}leaderboard:${guildId}:${type}`;
+                const data = await this.redis.get(fullKey);
                 if (data) {
                     return JSON.parse(data);
                 }
@@ -621,8 +627,8 @@ class RedisCacheManager {
 
     async cacheValidatedUsers(guildId, users) {
         try {
-            const key = `${this.keyPrefix}validated:${guildId}`;
-            const ttl = 600;
+            const key = `validated:${guildId}`;
+            const ttl = 600; // 10 minutes
             
             const cacheData = {
                 users: users,
@@ -634,7 +640,8 @@ class RedisCacheManager {
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 return await this.connectionManager.setCache(key, JSON.stringify(cacheData), ttl);
             } else if (this.redis) {
-                await this.redis.setex(key, ttl, JSON.stringify(cacheData));
+                const fullKey = `${this.keyPrefix}validated:${guildId}`;
+                await this.redis.setex(fullKey, ttl, JSON.stringify(cacheData));
                 return true;
             }
             
@@ -647,25 +654,26 @@ class RedisCacheManager {
 
     async getCachedValidatedUsers(guildId) {
         try {
-            const key = `${this.keyPrefix}validated:${guildId}`;
+            const key = `validated:${guildId}`;
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const data = await this.connectionManager.getCache(key);
                 if (data) {
                     const cacheData = JSON.parse(data);
                     const cacheAge = Date.now() - cacheData.cachedAt;
-                    if (cacheAge > 480000) {
+                    if (cacheAge > 480000) { // 8 minutes
                         console.log(`[CACHE] Validated users cache too old (${Math.round(cacheAge/1000)}s), ignoring`);
                         return null;
                     }
                     return cacheData.users;
                 }
             } else if (this.redis) {
-                const data = await this.redis.get(key);
+                const fullKey = `${this.keyPrefix}validated:${guildId}`;
+                const data = await this.redis.get(fullKey);
                 if (data) {
                     const cacheData = JSON.parse(data);
                     const cacheAge = Date.now() - cacheData.cachedAt;
-                    if (cacheAge > 480000) {
+                    if (cacheAge > 480000) { // 8 minutes
                         console.log(`[CACHE] Validated users cache too old (${Math.round(cacheAge/1000)}s), ignoring`);
                         return null;
                     }
@@ -680,6 +688,9 @@ class RedisCacheManager {
         }
     }
 
+    /**
+     * Safe write with race condition protection
+     */
     async safeWriteValidatedUsers(guildId, users) {
         try {
             const existingData = await this.getCachedValidatedUsers(guildId);
@@ -689,7 +700,7 @@ class RedisCacheManager {
                 return false;
             }
             
-            const invalidationFlag = `${this.keyPrefix}invalidated:${guildId}`;
+            const invalidationFlag = `invalidated:${guildId}`;
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const wasInvalidated = await this.connectionManager.getCache(invalidationFlag);
@@ -697,7 +708,7 @@ class RedisCacheManager {
                     const invalidatedAt = parseInt(wasInvalidated);
                     const timeSinceInvalidation = Date.now() - invalidatedAt;
                     
-                    if (timeSinceInvalidation < 30000) {
+                    if (timeSinceInvalidation < 30000) { // 30 seconds
                         console.log(`[CACHE] Cache was recently invalidated (${Math.round(timeSinceInvalidation/1000)}s ago), skipping write`);
                         return false;
                     }
@@ -714,35 +725,50 @@ class RedisCacheManager {
 
     async invalidateGuildCache(guildId) {
         try {
-            const patterns = [
-                `${this.keyPrefix}leaderboard:${guildId}:*`,
-                `${this.keyPrefix}validated:${guildId}`
-            ];
-
-            const invalidationFlag = `${this.keyPrefix}invalidated:${guildId}`;
+            const invalidationFlag = `invalidated:${guildId}`;
+            
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 await this.connectionManager.setCache(invalidationFlag, Date.now().toString(), 60);
-            }
-
-            let totalCleared = 0;
-            for (const pattern of patterns) {
-                if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                
+                const patterns = [
+                    `leaderboard:${guildId}:*`,
+                    `validated:${guildId}`
+                ];
+                
+                let totalCleared = 0;
+                for (const pattern of patterns) {
                     const cleared = await this.connectionManager.clearPattern(pattern);
                     totalCleared += cleared;
-                } else if (this.redis) {
+                }
+                
+                if (totalCleared > 0) {
+                    console.log(`[CACHE] Invalidated ${totalCleared} guild cache entries for ${guildId}`);
+                }
+                
+                return totalCleared > 0;
+            } else if (this.redis) {
+                const patterns = [
+                    `${this.keyPrefix}leaderboard:${guildId}:*`,
+                    `${this.keyPrefix}validated:${guildId}`
+                ];
+                
+                let totalCleared = 0;
+                for (const pattern of patterns) {
                     const keys = await this.redis.keys(pattern);
                     if (keys.length > 0) {
                         await this.redis.del(...keys);
                         totalCleared += keys.length;
                     }
                 }
+                
+                if (totalCleared > 0) {
+                    console.log(`[CACHE] Invalidated ${totalCleared} guild cache entries for ${guildId}`);
+                }
+                
+                return totalCleared > 0;
             }
-
-            if (totalCleared > 0) {
-                console.log(`[CACHE] Invalidated ${totalCleared} guild cache entries for ${guildId}`);
-            }
-
-            return totalCleared > 0;
+            
+            return false;
         } catch (error) {
             console.error('[CACHE] Error invalidating guild cache:', error);
             return false;
@@ -753,13 +779,14 @@ class RedisCacheManager {
     
     async setXPCooldown(userId, guildId, source, cooldownMs) {
         try {
-            const key = `${this.keyPrefix}cooldown:${guildId}:${userId}:${source}`;
+            const key = `cooldown:${guildId}:${userId}:${source}`;
             const ttl = Math.ceil(cooldownMs / 1000);
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 return await this.connectionManager.setCache(key, Date.now().toString(), ttl);
             } else if (this.redis) {
-                await this.redis.setex(key, ttl, Date.now().toString());
+                const fullKey = `${this.keyPrefix}cooldown:${guildId}:${userId}:${source}`;
+                await this.redis.setex(fullKey, ttl, Date.now().toString());
                 return true;
             }
             
@@ -772,13 +799,14 @@ class RedisCacheManager {
 
     async isOnXPCooldown(userId, guildId, source) {
         try {
-            const key = `${this.keyPrefix}cooldown:${guildId}:${userId}:${source}`;
+            const key = `cooldown:${guildId}:${userId}:${source}`;
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 const exists = await this.connectionManager.getCache(key);
                 return exists !== null;
             } else if (this.redis) {
-                const exists = await this.redis.exists(key);
+                const fullKey = `${this.keyPrefix}cooldown:${guildId}:${userId}:${source}`;
+                const exists = await this.redis.exists(fullKey);
                 return exists === 1;
             }
             
@@ -793,12 +821,13 @@ class RedisCacheManager {
 
     async invalidateUserDailyProgress(userId, guildId, date) {
         try {
-            const key = `${this.keyPrefix}daily:${guildId}:${userId}:${date}`;
+            const key = `daily:${guildId}:${userId}:${date}`;
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 await this.connectionManager.deleteCache(key);
             } else if (this.redis) {
-                await this.redis.del(key);
+                const fullKey = `${this.keyPrefix}daily:${guildId}:${userId}:${date}`;
+                await this.redis.del(fullKey);
             }
             
             return true;
@@ -820,12 +849,13 @@ class RedisCacheManager {
 
     async cleanupInvalidationFlags() {
         try {
-            const pattern = `${this.keyPrefix}invalidated:*`;
+            const pattern = `invalidated:*`;
             
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 await this.connectionManager.clearPattern(pattern);
             } else if (this.redis) {
-                const keys = await this.redis.keys(pattern);
+                const fullPattern = `${this.keyPrefix}invalidated:*`;
+                const keys = await this.redis.keys(fullPattern);
                 if (keys.length > 0) {
                     await this.redis.del(...keys);
                 }
@@ -843,6 +873,9 @@ class RedisCacheManager {
         return this.preloadingInProgress;
     }
 
+    /**
+     * Get comprehensive cache statistics
+     */
     async getCacheStats() {
         try {
             if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
@@ -894,6 +927,9 @@ class RedisCacheManager {
         }
     }
 
+    /**
+     * Count Redis keys directly with pattern
+     */
     async countRedisKeysDirect(redis, pattern) {
         try {
             const fullPattern = `${this.keyPrefix}${pattern}`;
@@ -937,6 +973,9 @@ class RedisCacheManager {
         }
     }
 
+    /**
+     * Health check for Redis connection
+     */
     async healthCheck() {
         try {
             if (this.connectionManager) {
@@ -952,16 +991,20 @@ class RedisCacheManager {
         }
     }
 
+    /**
+     * Test cache functionality
+     */
     async testCache() {
         try {
-            const testKey = `${this.keyPrefix}test:${Date.now()}`;
+            const testKey = `test:${Date.now()}`;
             const testValue = 'cache-test-value';
             
             let setResult = false;
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 setResult = await this.connectionManager.setCache(testKey, testValue, 60);
             } else if (this.redis) {
-                await this.redis.setex(testKey, 60, testValue);
+                const fullKey = `${this.keyPrefix}test:${Date.now()}`;
+                await this.redis.setex(fullKey, 60, testValue);
                 setResult = true;
             }
             
@@ -973,14 +1016,16 @@ class RedisCacheManager {
             if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                 getValue = await this.connectionManager.getCache(testKey);
             } else if (this.redis) {
-                getValue = await this.redis.get(testKey);
+                const fullKey = `${this.keyPrefix}test:${Date.now()}`;
+                getValue = await this.redis.get(fullKey);
             }
             
             try {
                 if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
                     await this.connectionManager.deleteCache(testKey);
                 } else if (this.redis) {
-                    await this.redis.del(testKey);
+                    const fullKey = `${this.keyPrefix}test:${Date.now()}`;
+                    await this.redis.del(fullKey);
                 }
             } catch (cleanupError) {
                 console.log('[CACHE] Cleanup error (not critical):', cleanupError.message);
@@ -998,8 +1043,111 @@ class RedisCacheManager {
         }
     }
 
+    // ==================== ADVANCED CACHE MANAGEMENT ====================
+
+    /**
+     * Batch invalidate multiple cache patterns
+     */
+    async batchInvalidate(patterns) {
+        try {
+            let totalCleared = 0;
+            
+            for (const pattern of patterns) {
+                if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                    const cleared = await this.connectionManager.clearPattern(pattern);
+                    totalCleared += cleared;
+                } else if (this.redis) {
+                    const fullPattern = pattern.startsWith(this.keyPrefix) ? pattern : `${this.keyPrefix}${pattern}`;
+                    const keys = await this.redis.keys(fullPattern);
+                    if (keys.length > 0) {
+                        await this.redis.del(...keys);
+                        totalCleared += keys.length;
+                    }
+                }
+            }
+            
+            console.log(`[CACHE] Batch invalidated ${totalCleared} keys across ${patterns.length} patterns`);
+            return totalCleared;
+            
+        } catch (error) {
+            console.error('[CACHE] Error in batch invalidation:', error);
+            return 0;
+        }
+    }
+
+    /**
+     * Get cache memory usage statistics
+     */
+    async getCacheMemoryStats() {
+        try {
+            if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
+                return { available: false, reason: 'Redis not available' };
+            }
+
+            const redis = this.connectionManager.getRedis();
+            const info = await redis.info('memory');
+            
+            const stats = {
+                available: true,
+                usedMemory: info.match(/used_memory:(\d+)/)?.[1] || '0',
+                usedMemoryHuman: info.match(/used_memory_human:([^\r\n]+)/)?.[1] || 'Unknown',
+                usedMemoryRss: info.match(/used_memory_rss:(\d+)/)?.[1] || '0',
+                usedMemoryPeak: info.match(/used_memory_peak:(\d+)/)?.[1] || '0',
+                usedMemoryPeakHuman: info.match(/used_memory_peak_human:([^\r\n]+)/)?.[1] || 'Unknown',
+                memoryFragmentationRatio: info.match(/mem_fragmentation_ratio:([0-9.]+)/)?.[1] || '0'
+            };
+            
+            return stats;
+            
+        } catch (error) {
+            console.error('[CACHE] Error getting memory stats:', error);
+            return { available: false, error: error.message };
+        }
+    }
+
+    /**
+     * Set cache expiry for existing key
+     */
+    async setCacheExpiry(key, ttlSeconds) {
+        try {
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                const redis = this.connectionManager.getRedis();
+                return await redis.expire(key, ttlSeconds);
+            } else if (this.redis) {
+                const fullKey = key.startsWith(this.keyPrefix) ? key : `${this.keyPrefix}${key}`;
+                return await this.redis.expire(fullKey, ttlSeconds);
+            }
+            return false;
+        } catch (error) {
+            console.error('[CACHE] Error setting cache expiry:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Get cache key TTL
+     */
+    async getCacheTTL(key) {
+        try {
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                const redis = this.connectionManager.getRedis();
+                return await redis.ttl(key);
+            } else if (this.redis) {
+                const fullKey = key.startsWith(this.keyPrefix) ? key : `${this.keyPrefix}${key}`;
+                return await this.redis.ttl(fullKey);
+            }
+            return -1;
+        } catch (error) {
+            console.error('[CACHE] Error getting cache TTL:', error);
+            return -1;
+        }
+    }
+
     // ==================== DEBUG METHODS ====================
 
+    /**
+     * Debug cache contents
+     */
     async debugCacheContents() {
         try {
             if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
@@ -1050,11 +1198,14 @@ class RedisCacheManager {
         }
     }
 
+    /**
+     * Manual comprehensive cache test
+     */
     async manualCacheTest() {
         try {
             console.log('[CACHE TEST] Starting comprehensive manual cache test...');
             
-            const testKey = `${this.keyPrefix}test:${Date.now()}`;
+            const testKey = `test:${Date.now()}`;
             const testValue = JSON.stringify({ test: true, timestamp: Date.now() });
             
             console.log('[CACHE TEST] Testing basic cache operations...');
@@ -1072,7 +1223,7 @@ class RedisCacheManager {
                 console.log(`[CACHE TEST] Delete result: ${deletedValue === null ? 'SUCCESS' : 'FAILED'}`);
                 
                 console.log('[CACHE TEST] Testing binary cache operations...');
-                const binaryKey = `${this.keyPrefix}test:binary:${Date.now()}`;
+                const binaryKey = `test:binary:${Date.now()}`;
                 const binaryValue = Buffer.from('test binary data for cache');
                 
                 const binarySetResult = await this.connectionManager.setBinaryCache(binaryKey, binaryValue, 60);
@@ -1096,6 +1247,9 @@ class RedisCacheManager {
         }
     }
 
+    /**
+     * Debug preload user (force preload a specific user)
+     */
     async debugPreloadUser(guild, userId) {
         try {
             console.log(`[CACHE DEBUG] Force preloading user ${userId} in guild ${guild.name}`);
@@ -1134,6 +1288,9 @@ class RedisCacheManager {
         }
     }
 
+    /**
+     * Clear all cache (USE WITH EXTREME CAUTION)
+     */
     async debugClearAllCache() {
         try {
             if (!this.connectionManager || !this.connectionManager.isRedisAvailable()) {
@@ -1169,8 +1326,95 @@ class RedisCacheManager {
         }
     }
 
+    /**
+     * Get detailed cache analysis
+     */
+    async getCacheAnalysis() {
+        try {
+            const stats = await this.getCacheStats();
+            const memoryStats = await this.getCacheMemoryStats();
+            const preloadStats = this.getPreloadStats();
+            
+            return {
+                basic: stats,
+                memory: memoryStats,
+                preload: preloadStats,
+                performance: {
+                    totalCachedItems: stats.total || 0,
+                    cacheHitRate: preloadStats.totalUsers > 0 ? 
+                        Math.round(((stats.avatars || 0) + (stats.posters || 0)) / preloadStats.totalUsers * 100) : 0,
+                    preloadSuccess: preloadStats.totalUsers > 0 ? 
+                        Math.round((preloadStats.avatarsPreloaded + preloadStats.postersPreloaded) / (preloadStats.totalUsers * 2) * 100) : 0
+                },
+                health: {
+                    redisAvailable: await this.healthCheck(),
+                    preloadingActive: this.isPreloading(),
+                    lastPreloadDuration: preloadStats.endTime && preloadStats.startTime ? 
+                        (preloadStats.endTime - preloadStats.startTime) / 1000 : null
+                }
+            };
+            
+        } catch (error) {
+            console.error('[CACHE] Error getting cache analysis:', error);
+            return { error: error.message };
+        }
+    }
+
+    /**
+     * Optimize cache performance
+     */
+    async optimizeCache() {
+        try {
+            console.log('[CACHE OPTIMIZE] Starting cache optimization...');
+            
+            let optimized = 0;
+            
+            // Clean up invalidation flags
+            await this.cleanupInvalidationFlags();
+            optimized++;
+            
+            // Remove expired keys (Redis handles this automatically, but we can force it)
+            if (this.connectionManager && this.connectionManager.isRedisAvailable()) {
+                const redis = this.connectionManager.getRedis();
+                
+                // Get all keys with TTL
+                const allKeys = await redis.keys(`${this.keyPrefix}*`);
+                for (const key of allKeys) {
+                    const ttl = await redis.ttl(key);
+                    if (ttl === 0) { // Already expired
+                        await redis.del(key);
+                        optimized++;
+                    }
+                }
+            }
+            
+            console.log(`[CACHE OPTIMIZE] Optimization complete: ${optimized} operations performed`);
+            return { success: true, operations: optimized };
+            
+        } catch (error) {
+            console.error('[CACHE OPTIMIZE] Error optimizing cache:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Cleanup resources
+     */
     async cleanup() {
         try {
+            // Force process any pending operations
+            if (this.preloadingInProgress) {
+                console.log('[CACHE] Waiting for preloading to complete...');
+                let attempts = 0;
+                while (this.preloadingInProgress && attempts < 30) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    attempts++;
+                }
+            }
+            
+            // Clean up invalidation flags
+            await this.cleanupInvalidationFlags();
+            
             console.log('[CACHE] Cache manager cleanup complete');
         } catch (error) {
             console.error('[CACHE] Error during cleanup:', error);
